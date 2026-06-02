@@ -195,37 +195,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         window.title = config.displayName
         window.minSize = NSSize(width: 800, height: 600)
 
-        // Center on the main screen
+        // Center on the main screen. We compute the centered origin
+        // from the *primary* screen's visibleFrame. This is the only
+        // setFrame call — we deliberately do NOT use
+        // setFrameAutosaveName because on macOS 26 with multi-monitor
+        // setups, the autosave restoration can move the window off
+        // screen on subsequent launches (we've observed y=-1114 with
+        // the user's 3-monitor setup). Each launch centers the window
+        // freshly, which is the standard behavior for first-launch
+        // apps and is also what `NSWindow.center()` does. The user
+        // can still drag the window; we just don't persist that
+        // position between launches.
         if let screen = NSScreen.main {
             let sf = screen.visibleFrame
+            NSLog("[\(config.name)] NSScreen.main visibleFrame: \(sf)")
             let x = sf.origin.x + (sf.width - rect.width) / 2
             let y = sf.origin.y + (sf.height - rect.height) / 2
+            NSLog("[\(config.name)] centering window at (\(x), \(y)) with size \(rect.size)")
             window.setFrame(NSRect(x: x, y: y, width: rect.width, height: rect.height), display: true)
+            NSLog("[\(config.name)] window frame after setFrame: \(window.frame)")
+        } else {
+            NSLog("[\(config.name)] WARNING: NSScreen.main is nil, falling back to window.center()")
+            window.center()
         }
-        window.setFrameAutosaveName("\(config.name)MainWindow")
 
-        // WKWebView. The contentView is created lazily by Cocoa when we
-        // first access it; its bounds may be NSRect.zero at this point.
-        // We size the webView to the window's content rect (which IS
-        // computed correctly because the window has a frame) and rely
-        // on autoresizingMask to keep it filling as the user resizes.
+        // WKWebView. We start with the contentView's *current* bounds
+        // (which is correct at this point because the window has a
+        // frame and the contentView is sized to match). The
+        // autoresizingMask keeps the webView filling the contentView
+        // as the user resizes the window.
         let cfg = WKWebViewConfiguration()
         cfg.defaultWebpagePreferences.allowsContentJavaScript = true
         cfg.websiteDataStore = WKWebsiteDataStore.default()
-        webView = WKWebView(frame: window.contentRect(forFrameRect: window.frame), configuration: cfg)
+        webView = WKWebView(frame: window.contentView!.bounds, configuration: cfg)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        // NOTE: We deliberately do NOT set drawsBackground=false here. On
-        // macOS 26, this private KVC can cause the webView to render a
-        // black background and never paint the document content even
-        // though the URL loaded successfully. Default opaque white is
-        // what we want — if the webapp's CSS wants transparency it can
-        // opt in.
         window.contentView?.addSubview(webView)
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        NSLog("[\(config.name)] window isVisible: \(window.isVisible), screen: \(String(describing: window.screen))")
     }
 
     // MARK: - Menu bar (standard, app-agnostic)
@@ -320,6 +330,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         let url = URL(string: "http://127.0.0.1:\(config.port)\(config.url)")!
         NSLog("[\(config.name)] server ready, loading UI")
         log("Server ready, loading UI")
+        // DIAGNOSTIC: temporarily inject a bright background to confirm
+        // the webView is rendering. The Odysseus login page is
+        // intentionally dark (#282c34 body, #111 card) which can look
+        // like a blank window. This will be removed once we confirm
+        // the page is rendering correctly.
+        let debugCSS = """
+        body { background: lime !important; }
+        body::before {
+            content: 'mac-app-builder DIAGNOSTIC: webview is rendering correctly. This bright background confirms the page is loaded. The dark theme will be restored in the next build.';
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            background: yellow;
+            color: black;
+            font: bold 16px sans-serif;
+            padding: 20px;
+            z-index: 99999;
+        }
+        """
+        let userScript = WKUserScript(source: debugCSS, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        webView.configuration.userContentController.addUserScript(userScript)
         webView.load(URLRequest(url: url))
     }
 
@@ -382,6 +412,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         } else {
             NSLog("[\(config.name)] webView started loading")
         }
+        NSLog("[\(config.name)] webView frame: \(webView.frame)  contentView bounds: \(String(describing: window.contentView?.bounds))")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -389,6 +420,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             NSLog("[\(config.name)] webView finished loading \(url)")
         } else {
             NSLog("[\(config.name)] webView finished loading")
+        }
+        NSLog("[\(config.name)] webView frame after load: \(webView.frame)  contentView bounds: \(String(describing: window.contentView?.bounds))")
+        // Force a redraw on the main thread, just in case macOS 26 needs
+        // an extra nudge to composite the WKWebView's layer into the
+        // window's contentView. We've seen the window appear black on
+        // macOS 26 with multi-monitor setups otherwise.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.webView.frame = self.window.contentView!.bounds
+            self.webView.needsDisplay = true
         }
     }
 
