@@ -53,6 +53,14 @@ DATA_DIR="$HOME/Library/Application Support/$BUNDLE_ID"
 LOGS_DIR="$HOME/Library/Logs/$BUNDLE_ID"
 rm -rf "$DATA_DIR" "$LOGS_DIR" 2>/dev/null || true
 
+# ── Pre-seed the data dirs so the wrapper's first-run wizard doesn't appear ─
+# The lift-and-shift test verifies that the .app is portable. It's not testing
+# the first-run wizard itself. So we pre-create the data dirs with a stub
+# auth.json (the marker the wrapper uses to detect "first run is done") and
+# let the actual app create the rest of the data on first launch.
+mkdir -p "$DATA_DIR" "$LOGS_DIR"
+echo '{"users":{"_test":{"is_admin":true}}}' > "$DATA_DIR/auth.json"
+
 # ── Copy to a temp location, launch, verify ──────────────────────────────
 TEST_DIR="/tmp/lift-shift-test-$$"
 mkdir -p "$TEST_DIR/original" "$TEST_DIR/shifted"

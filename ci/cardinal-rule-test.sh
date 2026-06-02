@@ -61,6 +61,18 @@ echo "    $LOGS_DIR"
 echo "    $CACHE_DIR"
 rm -rf "$DATA_DIR" "$LOGS_DIR" "$CACHE_DIR" 2>/dev/null || true
 
+# ── Pre-seed the data dirs so the wrapper's first-run wizard doesn't appear ─
+# The Cardinal Rule test verifies that the wrapper, after the user has already
+# completed first-run setup, doesn't write data into the .app. The test isn't
+# testing the first-run wizard itself — it would be impractical to drive a
+# native Swift form from a shell. So we pre-create auth.json (the marker that
+# the wrapper uses to detect "first run is done") and let setup.py create the
+# rest. This way the test focuses on what it's supposed to test: that the
+# post-setup data flow doesn't write into the bundle.
+mkdir -p "$DATA_DIR" "$LOGS_DIR" "$CACHE_DIR"
+echo '{"users":{"_test":{"is_admin":true}}}' > "$DATA_DIR/auth.json"
+echo "  pre-seeded $DATA_DIR/auth.json (test fixture)"
+
 # ── Install to a test location ─────────────────────────────────────────────
 TEST_INSTALL="/tmp/cardinal-test-$$"
 mkdir -p "$TEST_INSTALL"

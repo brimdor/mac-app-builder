@@ -126,6 +126,160 @@ else
     done
 fi
 
+# ── 7a. Patch the source to respect $DATA_DIR (Cardinal Rule fix) ────────────
+# Upstream Odysseus hardcodes its data path to './data/' relative to the
+# working directory. The wrapper sets the working directory to
+# Contents/Resources/app/, so the data would land inside the .app — a
+# Cardinal Rule violation. We patch the source so that when the wrapper
+# sets DATA_DIR=~/Library/Application Support/<bundle_id>/, Odysseus
+# uses that path instead.
+#
+# This is a temporary workaround until upstream Odysseus supports DATA_DIR
+# natively. The LLM agent should file a PR upstream to remove this patch.
+echo "▶ Patching source to respect \$DATA_DIR (Cardinal Rule fix)"
+
+# Important: the patches below are not idempotent on their own. The
+# replacement text contains the search pattern (e.g. we replace
+# `os.path.join(BASE_DIR, "data")` with
+# `os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))` — which
+# still contains the search text). Running the patch twice on the same
+# file would double-wrap. To avoid that, we work on a fresh copy of the
+# upstream source each time. The cloned source is in $WORK_DIR/app, and
+# we copy it to $APP_DIR/Resources/app/ at step 8 — but that step is AFTER
+# this patch. To make the patches idempotent, we restore the source files
+# from $WORK_DIR/app/ before patching.
+
+RESTORE_FROM="$WORK_DIR/app"
+
+# 1. core/constants.py and src/constants.py: replace hardcoded DATA_DIR
+for constants_file in \
+    "$APP_DIR/Resources/app/core/constants.py" \
+    "$APP_DIR/Resources/app/src/constants.py"; do
+    rel_path="${constants_file#$APP_DIR/Resources/app/}"
+    src_file="$RESTORE_FROM/$rel_path"
+    if [ -f "$src_file" ] && [ -f "$constants_file" ]; then
+        # Copy the unpatched source from $WORK_DIR into the app bundle so
+        # we can patch a clean copy. The full source copy happens at
+        # step 8; this is a no-op if it already happened.
+        cp "$src_file" "$constants_file"
+    fi
+    if [ -f "$constants_file" ] && grep -q '^DATA_DIR = os.path.join(BASE_DIR, "data")' "$constants_file"; then
+        sed -i.bak 's|^DATA_DIR = os.path.join(BASE_DIR, "data")|DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))|' "$constants_file"
+        rm -f "$constants_file.bak"
+        echo "  patched: ${constants_file#$APP_DIR/Resources/app/}"
+    fi
+done
+
+# 2. setup.py: same DATA_DIR fix + LOGS_DIR fix
+SETUP_FILE="$APP_DIR/Resources/app/setup.py"
+SETUP_SRC="$RESTORE_FROM/setup.py"
+if [ -f "$SETUP_SRC" ] && [ -f "$SETUP_FILE" ]; then
+    cp "$SETUP_SRC" "$SETUP_FILE"
+fi
+if [ -f "$SETUP_FILE" ]; then
+    if grep -q '^DATA_DIR = os.path.join(BASE_DIR, "data")' "$SETUP_FILE"; then
+        sed -i.bak 's|^DATA_DIR = os.path.join(BASE_DIR, "data")|DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))|' "$SETUP_FILE"
+        echo "  patched: setup.py (DATA_DIR)"
+    fi
+    # LOGS_DIR — use Python's re.sub (which is idempotent) to avoid the
+    # sed recursion issue where the replacement contains the search pattern.
+    if grep -q 'os.path.join(BASE_DIR, "logs")' "$SETUP_FILE"; then
+        python3 -c "
+import re
+p = '$SETUP_FILE'
+with open(p) as f:
+    content = f.read()
+content = re.sub(
+    r'os\.path\.join\(BASE_DIR, \"logs\"\)',
+    'os.environ.get(\"LOGS_DIR\", os.path.join(BASE_DIR, \"logs\"))',
+    content
+)
+with open(p, 'w') as f:
+    f.write(content)
+print('  patched: setup.py (LOGS_DIR)')
+"
+    fi
+    rm -f "$SETUP_FILE.bak"
+fi
+
+# 3. routes/embedding_routes.py: _ENDPOINT_FILE
+EMBED_FILE="$APP_DIR/Resources/app/routes/embedding_routes.py"
+EMBED_SRC="$RESTORE_FROM/routes/embedding_routes.py"
+if [ -f "$EMBED_SRC" ] && [ -f "$EMBED_FILE" ]; then
+    cp "$EMBED_SRC" "$EMBED_FILE"
+fi
+if [ -f "$EMBED_FILE" ] && grep -q '_ENDPOINT_FILE = os.path.join(BASE_DIR, "data"' "$EMBED_FILE"; then
+    sed -i.bak 's|_ENDPOINT_FILE = os.path.join(BASE_DIR, "data", "embedding_endpoint.json")|_ENDPOINT_FILE = os.path.join(os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data")), "embedding_endpoint.json")|' "$EMBED_FILE"
+    rm -f "$EMBED_FILE.bak"
+    echo "  patched: routes/embedding_routes.py (_ENDPOINT_FILE)"
+fi
+
+# 4. routes/personal_routes.py: UPLOADS_DIR
+PERSONAL_FILE="$APP_DIR/Resources/app/routes/personal_routes.py"
+PERSONAL_SRC="$RESTORE_FROM/routes/personal_routes.py"
+if [ -f "$PERSONAL_SRC" ] && [ -f "$PERSONAL_FILE" ]; then
+    cp "$PERSONAL_SRC" "$PERSONAL_FILE"
+fi
+if [ -f "$PERSONAL_FILE" ] && grep -q 'UPLOADS_DIR = os.path.join(BASE_DIR, "data"' "$PERSONAL_FILE"; then
+    sed -i.bak 's|UPLOADS_DIR = os.path.join(BASE_DIR, "data", "personal_uploads")|UPLOADS_DIR = os.path.join(os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data")), "personal_uploads")|' "$PERSONAL_FILE"
+    rm -f "$PERSONAL_FILE.bak"
+    echo "  patched: routes/personal_routes.py (UPLOADS_DIR)"
+fi
+
+# 5. core/database.py: DATABASE_URL fallback
+DATABASE_FILE="$APP_DIR/Resources/app/core/database.py"
+DATABASE_SRC="$RESTORE_FROM/core/database.py"
+if [ -f "$DATABASE_SRC" ] && [ -f "$DATABASE_FILE" ]; then
+    cp "$DATABASE_SRC" "$DATABASE_FILE"
+fi
+if [ -f "$DATABASE_FILE" ] && grep -q 'sqlite:///./data/app.db' "$DATABASE_FILE"; then
+    # Replace the hardcoded fallback with one that uses $DATA_DIR.
+    # The default "sqlite:///./data/app.db" is relative to the working
+    # directory; we replace it with an absolute path based on $DATA_DIR.
+    sed -i.bak "s|DATABASE_URL = os.getenv(\"DATABASE_URL\", \"sqlite:///./data/app.db\")|DATABASE_URL = os.getenv(\"DATABASE_URL\", \"sqlite:///\" + os.path.join(os.environ.get(\"DATA_DIR\", \"./data\"), \"app.db\"))|" "$DATABASE_FILE"
+    rm -f "$DATABASE_FILE.bak"
+    echo "  patched: core/database.py (DATABASE_URL)"
+fi
+
+# 6. Verify: scan for any remaining hardcoded 'BASE_DIR, "data"' usages
+echo "▶ Verifying no hardcoded data paths remain in patched files"
+REMAINING=$(grep -rn 'os.path.join(BASE_DIR, "data"' "$APP_DIR/Resources/app/core/" "$APP_DIR/Resources/app/src/" "$APP_DIR/Resources/app/setup.py" "$APP_DIR/Resources/app/routes/" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$REMAINING" -gt 0 ]; then
+    echo "  WARNING: $REMAINING hardcoded data paths still present:"
+    grep -rn 'os.path.join(BASE_DIR, "data"' "$APP_DIR/Resources/app/core/" "$APP_DIR/Resources/app/src/" "$APP_DIR/Resources/app/setup.py" "$APP_DIR/Resources/app/routes/" 2>/dev/null | sed 's/^/    /'
+else
+    echo "  ✓ all hardcoded data paths patched"
+fi
+
+# 2. setup.py: same DATA_DIR fix + LOGS_DIR fix
+SETUP_FILE="$APP_DIR/Resources/app/setup.py"
+if [ -f "$SETUP_FILE" ]; then
+    # DATA_DIR
+    if grep -q '^DATA_DIR = os.path.join(BASE_DIR, "data")' "$SETUP_FILE"; then
+        sed -i.bak 's|^DATA_DIR = os.path.join(BASE_DIR, "data")|DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))|' "$SETUP_FILE"
+        echo "  patched: setup.py (DATA_DIR)"
+    fi
+    # LOGS_DIR — replace the hardcoded `os.path.join(BASE_DIR, "logs")` in the DIRS list
+    # The pattern is: in the DIRS list, "logs" comes from BASE_DIR. Replace with env var.
+    if grep -q 'os.path.join(BASE_DIR, "logs")' "$SETUP_FILE"; then
+        sed -i.bak 's|os.path.join(BASE_DIR, "logs")|os.environ.get("LOGS_DIR", os.path.join(BASE_DIR, "logs"))|' "$SETUP_FILE"
+        echo "  patched: setup.py (LOGS_DIR)"
+    fi
+    # .env files — the example is fine in the app dir, but the user's .env should go to DATA_DIR
+    # We leave the .env example in the app dir (it's part of the webapp source), but
+    # the user's .env (which the wizard will read on subsequent launches) should be
+    # in DATA_DIR. The wizard writes it directly there.
+    rm -f "$SETUP_FILE.bak"
+fi
+
+# 3. Verify: grep for any remaining hardcoded data paths in core/ and setup.py
+echo "▶ Verifying no hardcoded data paths remain"
+HARDCODED=$(grep -rn 'os.path.join(BASE_DIR, "data")' "$APP_DIR/Resources/app/core/" "$APP_DIR/Resources/app/setup.py" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$HARDCODED" -gt 0 ]; then
+    echo "  WARNING: $HARDCODED hardcoded data paths still present:"
+    grep -rn 'os.path.join(BASE_DIR, "data")' "$APP_DIR/Resources/app/core/" "$APP_DIR/Resources/app/setup.py" 2>/dev/null | sed 's/^/    /'
+fi
+
 # ── 8. Verify the install works ────────────────────────────────────────────
 echo "▶ Verifying install"
 PYTHONPATH="$SITE_PACKAGES_DIR" "$PYTHON_BIN" -c "

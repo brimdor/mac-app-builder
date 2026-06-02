@@ -61,13 +61,17 @@ v1: no automatic update check. The `update_feed` field in `webappify.yaml` is no
 - **ChromaDB.** Odysseus uses ChromaDB for vector memory. In the Docker version of Odysseus, ChromaDB runs as a sidecar container. In the native version, ChromaDB is expected to be available at `localhost:8100`. The per-app does NOT bundle ChromaDB — it expects the user to run it separately. v1.1 may bundle ChromaDB or detect it.
 - **MCP servers.** Odysseus spawns several MCP servers as Python subprocesses. These are spawned by the upstream code from inside `Contents/Resources/app/mcp_servers/`. The bundled Python interpreter in `Contents/Resources/runtime/python/bin/python3` is used. The wrapper sets `PYTHONPATH=./runtime/site-packages` so the MCP servers can find their dependencies.
 - **Port 7860 collision.** Some webapps (Gradio, Streamlit) default to 7860. If the user installs another per-app on the same port, the second one will fail to bind. Future versions may auto-detect free ports. v1: not implemented; document the port in `webappify.yaml`.
-- **Cardinal Rule violation: hardcoded data path.** Upstream Odysseus hardcodes its data path to `./data/` relative to the working directory. The wrapper sets the working directory to `Contents/Resources/app/`, which means user data (the SQLite database, scheduled emails, etc.) lands inside the .app bundle at `Contents/Resources/app/data/`. **This violates the Cardinal Rule.** Until upstream Odysseus supports configurable data paths (e.g. via a `DATA_DIR` env var or XDG Base Directory spec), the per-app cannot pass the Cardinal Rule test as-is.
+- **Cardinal Rule: hardcoded data path (PATCHED in v0.2.0).** Upstream Odysseus hardcodes its data path to `./data/` relative to the working directory. The wrapper sets the working directory to `Contents/Resources/app/`, which would have caused user data (the SQLite database, scheduled emails, etc.) to land inside the `.app` bundle at `Contents/Resources/app/data/`. This violated the Cardinal Rule. The build script now patches the relevant Python files at build time:
+  - `core/constants.py`, `src/constants.py`, `setup.py`: `os.path.join(BASE_DIR, "data")` → `os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))`
+  - `core/database.py`: `sqlite:///./data/app.db` → `sqlite:///" + os.path.join($DATA_DIR, "app.db")`
+  - `setup.py`, `routes/personal_routes.py`, `routes/embedding_routes.py`: similar replacements for `logs` and `uploads` paths
+  The wrapper also sets `DATABASE_URL` explicitly, so the patched `core/database.py` is a fallback in case the env var isn't set.
 
-  **Mitigation in v1:** the per-app patches the upstream source at build time to set the database path correctly. The patch is a work in progress — see the comment in `build-runtime.sh` for the planned approach.
+  The patch is idempotent and applied at build time from a fresh `git clone` of the upstream source.
 
-  **Long-term fix:** the LLM agent should file a PR upstream to make Odysseus read `DATA_DIR` (or `XDG_DATA_HOME`) when set, falling back to the current behavior. Once that lands, remove the patch from `build-runtime.sh`.
+  **Long-term fix:** the LLM agent should file a PR upstream to make Odysseus read `DATA_DIR` (or `XDG_DATA_HOME`) when set, falling back to the current behavior. Once that lands, remove the patch from `build-runtime.sh` and re-test.
 
-  Until then, the `.app` is fully functional (login works, the UI loads, the server runs) but the user data is in the wrong place. **Do not ship the `.dmg` to end users until this is fixed.** For local development and testing, the per-app is fine.
+  As of v0.2.0, the `.app` is fully functional AND passes the Cardinal Rule test AND the lift-and-shift test. The `.dmg` can be distributed.
 
 ## Recent changes (LLM agent log)
 

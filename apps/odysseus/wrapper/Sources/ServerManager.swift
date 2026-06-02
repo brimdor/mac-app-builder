@@ -66,16 +66,16 @@ final class ServerManager {
         proc.arguments = arguments
         proc.currentDirectoryURL = URL(fileURLWithPath: config.appDir)
 
-        // First-launch detection: if the database doesn't exist in the
-        // data dir, run setup.py if it's in the app source. This avoids
-        // the common pattern where webapps have a separate "first run"
-        // step (often via setup.py) that the user is expected to do
-        // manually in Terminal.
+        // First-launch detection: run setup.py if the database doesn't exist.
+        // This is a safety net — the wrapper's FirstRunWindowController
+        // should have already run setup.py before we get here. But if the
+        // user deletes just the database (and not auth.json) or vice versa,
+        // we want to re-run setup so the app still works.
         let dbPath = config.dataDir + "/app.db"
         if !FileManager.default.fileExists(atPath: dbPath) {
             let setupScript = config.appDir + "/setup.py"
             if FileManager.default.fileExists(atPath: setupScript) {
-                NSLog("[\(config.name)] first launch detected, running setup.py")
+                NSLog("[\(config.name)] first launch detected, running setup.py (safety net)")
                 let setupProc = Process()
                 setupProc.executableURL = URL(fileURLWithPath: program)
                 setupProc.arguments = [setupScript]
@@ -110,6 +110,8 @@ final class ServerManager {
         // Set up env. We set PYTHONPATH to include any bundled site-packages
         // (the convention for per-apps using python-build-standalone; venv
         // doesn't work reliably with relocatable Python on macOS).
+        // We also set DATABASE_URL explicitly to the right SQLite path so
+        // the webapp doesn't need any hardcoded-path patches for this.
         var env = ProcessInfo.processInfo.environment
         env["PORT"] = String(config.port)
         env["DATA_DIR"] = config.dataDir
@@ -117,6 +119,8 @@ final class ServerManager {
         env["CACHE_DIR"] = config.cacheDir
         env["APP_DIR"] = config.appDir
         env["BUNDLE_ID"] = config.bundleId
+        // SQLite URL: "sqlite:///" + absolute path. Three slashes = absolute path.
+        env["DATABASE_URL"] = "sqlite:///" + config.dataDir + "/app.db"
         // If the per-app bundles site-packages, expose them via PYTHONPATH.
         let sitePackages = (Bundle.main.resourcePath ?? "") + "/runtime/site-packages"
         if FileManager.default.fileExists(atPath: sitePackages) {

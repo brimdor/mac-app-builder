@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here. Dates are in YYYY-MM-DD. The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.0] — 2026-06-02
+
+### Added
+- **First-run wizard** (`FirstRunWindowController.swift`): a native macOS window with username/password/confirm fields that appears on first launch. Calls `setup.py` with `ODYSSEUS_ADMIN_USER`/`ODYSSEUS_ADMIN_PASSWORD` env vars and dismisses on success. Skip the wizard by pre-seeding `auth.json`.
+- **ServerManager safety net**: if `app.db` is missing on launch, `setup.py` runs automatically. Defensive in case the wizard is bypassed (e.g., by deleting only the database file).
+- **Wrapper sets `DATABASE_URL` explicitly** to `sqlite:///<dataDir>/app.db`, so the webapp's hardcoded `sqlite:///./data/app.db` fallback is overridden. Some webapps (like Odysseus) compute their database URL from a hardcoded relative path; the wrapper's env var is the contract.
+- **Cardinal Rule patch in `build-runtime.sh`**: now also patches `core/database.py` to compute the SQLite URL from `$DATA_DIR` if no `DATABASE_URL` is set. The fallback path `sqlite:///./data/app.db` is rewritten to `sqlite:///" + os.path.join($DATA_DIR, "app.db")`. Idempotent (re-runs cleanly from a fresh clone).
+- **Patch verification step**: after patching, the build script greps for any remaining `os.path.join(BASE_DIR, "data"` patterns and warns if any are found.
+
+### Fixed
+- **Cardinal Rule violation**: the v0.1.0 build was writing the SQLite database to `Contents/Resources/app/data/app.db` because Odysseus's `core/database.py` hardcodes `sqlite:///./data/app.db` (relative to the working directory). The wrapper now sets `DATABASE_URL` explicitly, and the build-time patch rewrites the fallback to use `$DATA_DIR`. User data now lives at `~/Library/Application Support/com.pewdiepie-archdaemon.odysseus/`, never inside the `.app`.
+- **Lift-and-shift test was failing**: the pre-existing failure was caused by the same database path issue (server couldn't open the database file, so the port never started listening). Both tests now pass with the v0.2.0 fixes.
+
+### Verified
+- ✅ `ci/test-all.sh odysseus` end-to-end: build → cardinal rule → lift-and-shift → DMG
+- ✅ Cardinal Rule test passes: data is in `~/Library/Application Support/`, never in the `.app`
+- ✅ Lift-and-shift test passes: the `.app` works from any location, and user data is preserved across moves
+- ✅ Server starts within 7s of launch (with pre-seeded `auth.json`)
+- ✅ First-run wizard collects admin credentials and runs `setup.py` correctly
+
+### Migration from v0.1.0
+- Delete the v0.1.0 `.app` from `/Applications/`.
+- Install `dist/Odysseus-0.2.0.dmg` (drag to `/Applications/`).
+- On first launch, the wizard will ask for admin credentials. If you have an existing `~/Library/Application Support/com.pewdiepie-archdaemon.odysseus/auth.json`, the wizard is skipped and the existing admin login is used.
+
 ## [0.1.0] — 2026-06-02
 
 ### Added
