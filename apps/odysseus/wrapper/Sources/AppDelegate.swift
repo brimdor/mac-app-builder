@@ -330,26 +330,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         let url = URL(string: "http://127.0.0.1:\(config.port)\(config.url)")!
         NSLog("[\(config.name)] server ready, loading UI")
         log("Server ready, loading UI")
-        // DIAGNOSTIC: temporarily inject a bright background to confirm
-        // the webView is rendering. The Odysseus login page is
-        // intentionally dark (#282c34 body, #111 card) which can look
-        // like a blank window. This will be removed once we confirm
-        // the page is rendering correctly.
-        let debugCSS = """
-        body { background: lime !important; }
-        body::before {
-            content: 'mac-app-builder DIAGNOSTIC: webview is rendering correctly. This bright background confirms the page is loaded. The dark theme will be restored in the next build.';
-            position: fixed;
-            top: 0; left: 0; right: 0;
-            background: yellow;
-            color: black;
-            font: bold 16px sans-serif;
-            padding: 20px;
-            z-index: 99999;
-        }
-        """
-        let userScript = WKUserScript(source: debugCSS, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-        webView.configuration.userContentController.addUserScript(userScript)
         webView.load(URLRequest(url: url))
     }
 
