@@ -1,0 +1,57 @@
+# webappify.yaml for Odysseus
+# This file lives at apps/odysseus/webappify.yaml in the mac-app-builder repo.
+# The build pipeline copies it into Contents/Resources/webappify.yaml inside
+# the produced .app. The wrapper reads it at startup.
+
+name: Odysseus
+display_name: Odysseus
+bundle_id: com.pewdiepie-archdaemon.odysseus
+version: 0.1.0
+
+runtime: python
+port: 7860
+url: /
+
+# Spawn uvicorn with the bundled Python.
+# Working dir is set to $APP_DIR (Contents/Resources/app/) by the wrapper.
+# Env vars passed: PORT, DATA_DIR, LOGS_DIR, CACHE_DIR, APP_DIR, BUNDLE_ID
+#
+# Note: dependencies are installed to runtime/site-packages/ (not a venv,
+# because venv + python-build-standalone has dyld issues on macOS). We set
+# PYTHONPATH so uvicorn finds the installed packages.
+start_command:
+  - ./runtime/python/bin/python3
+  - -m
+  - uvicorn
+  - app:app
+  - --host
+  - 127.0.0.1
+  - --port
+  - $PORT
+
+# Health check: the upstream app has an /api/ready endpoint (when available).
+# Polling the root URL is sufficient for v1.
+# health_check:
+#   url: /api/ready
+#   expected_status: 200
+#   timeout_seconds: 60
+
+# Env vars passed to uvicorn. Upstream Odysseus reads DATA_DIR, LOGS_DIR.
+env:
+  PYTHONUNBUFFERED: "1"
+  ODYSSEUS_NO_BROWSER_OPEN: "1"
+
+# First-run wizard (deferred to v1.1; see apps/odysseus/DESIGN.md)
+# first_run:
+#   - id: admin_user
+#     title: "Create your admin account"
+#     description: "Pick a username for the Odysseus admin account."
+#     type: text
+#     env: ODYSSEUS_ADMIN_USER
+#     required: true
+#   - id: admin_password
+#     title: "Set an admin password"
+#     description: "This will be your login password for Odysseus."
+#     type: password
+#     env: ODYSSEUS_ADMIN_PASSWORD
+#     required: true

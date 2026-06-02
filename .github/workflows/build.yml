@@ -1,0 +1,99 @@
+name: Build per-app .app and .dmg
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:        # allow manual trigger
+
+# Cancel in-progress runs for the same branch when a new commit lands
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.app }}
+    runs-on: macos-14   # need macOS for swiftc, codesign, and python-build-standalone compatibility
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # To add a new per-app, add its name here.
+        app: [odysseus]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python (for the build pipeline + Odysseus venv)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run shellcheck on all scripts
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck ci/*.sh wrapper/build.sh apps/*/build*.sh || true
+          else
+            echo "shellcheck not installed; skipping"
+          fi
+
+      - name: Validate webappify.yaml
+        run: |
+          PYBIN="${{ steps.python.outputs.python-path }}/bin/python"
+          for f in apps/*/webappify.yaml; do
+            [ -f "$f" ] || continue
+            echo "Validating $f"
+            $PYBIN -c "import yaml; yaml.safe_load(open('$f'))"
+          done
+
+      - name: Build the .app
+        run: ./ci/build-app.sh ${{ matrix.app }}
+        env:
+          # No color codes in CI logs
+          NO_COLOR: 1
+
+      - name: Cardinal Rule test
+        run: ./ci/cardinal-rule-test.sh "dist/$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-).app"
+
+      - name: Lift-and-shift test
+        run: ./ci/lift-and-shift-test.sh "dist/$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-).app"
+
+      - name: Package .dmg
+        run: ./ci/package-dmg.sh ${{ matrix.app }}
+
+      - name: Sign .app
+        run: ./ci/sign-app.sh "dist/$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-).app"
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-app
+          path: dist/*.app
+          if-no-files-found: error
+          retention-days: 30
+
+  # Aggregate status: only run after all per-app builds succeed
+  aggregate:
+    name: All per-apps built
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report
+        run: |
+          if [ "${{ needs.build.result }}" != "success" ]; then
+            echo "::error::Per-app build(s) failed"
+            exit 1
+          fi
+          echo "✓ All per-apps built successfully"

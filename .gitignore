@@ -1,0 +1,48 @@
+# macOS noise
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Build artifacts
+dist/
+build/
+*.dmg
+*.app/
+
+# Per-app build outputs (anything not in git by design)
+apps/*/build/
+apps/*/.venv/
+apps/*/__pycache__/
+apps/*/.pytest_cache/
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Swift
+.build/
+.swiftpm/
+*.xcodeproj/
+Package.resolved
+
+# Test artifacts
+test-output/
+/tmp/webappify-*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local config / secrets (never commit)
+.env
+.env.local
+secrets/

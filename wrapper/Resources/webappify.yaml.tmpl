@@ -1,0 +1,27 @@
+# webappify.yaml — runtime configuration template.
+# Each per-app dir provides its own webappify.yaml, copied into the
+# built .app at Contents/Resources/webappify.yaml. The wrapper reads
+# this file at startup to know how to launch the bundled server.
+
+name: MyApp
+display_name: My App
+bundle_id: com.example.myapp
+version: 0.1.0
+
+runtime: python
+port: 7860
+url: /
+
+# List form (preferred; no shell quoting issues):
+start_command:
+  - ./runtime/python/bin/python3
+  - -m
+  - uvicorn
+  - app:app
+  - --host
+  - 127.0.0.1
+  - --port
+  - $PORT
+
+# Or string form (split on whitespace, simple quoting only):
+# start_command: ./runtime/python/venv/bin/uvicorn app:app --host 127.0.0.1 --port $PORT

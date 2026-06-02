@@ -1,0 +1,6 @@
+CODEOWNERS
+
+# Default owners: repo creator. PRs require review from at least one
+# of these users (or a member of the listed teams).
+# /Users/chris owns everything by default. Customize as needed.
+*       @brimdor
