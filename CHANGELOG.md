@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here. Dates are in YYYY-MM-DD. The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.1] — 2026-06-02
+
+### Fixed
+- **Blank window on launch (macOS 26).** The wrapper was using `.fullSizeContentView` and `isMovableByWindowBackground = true` on the main window, which on macOS 26 caused the WKWebView to render a black interior even though the URL loaded successfully (curl `/login` → 200 OK, `webView(_:didFinish:)` fired). The window setup is now standard (titled/closable/miniaturizable/resizable, no fullSizeContentView), and the WKWebView is sized to the window's contentRect with `autoresizingMask = [.width, .height]`.
+- **Removed `setValue(false, forKey: "drawsBackground")` hack.** This private KVC could cause the webView to render a black background on macOS 26 even when the document loaded successfully. The webview now uses its default opaque background; webapps that want transparency can opt in via CSS.
+- **Added `WKNavigationDelegate` diagnostics** (`didStartProvisionalNavigation`, `didFinish`, `didFail`, `didFailProvisionalNavigation`) to `AppDelegate`. These log to stderr and `~/Library/Logs/<bundleId>/wrapper.log` and are essential for diagnosing future blank-window issues.
+
+### Verified
+- ✅ App launches from `/Applications/Odysseus.app`
+- ✅ Window appears with correct title and size
+- ✅ WKWebView loads `http://127.0.0.1:7860/` and follows the redirect to `/login`
+- ✅ `webView(_:didFinish:)` fires with `webView.url == http://127.0.0.1:7860/login`
+- ✅ HTTP `/login` returns 200 OK
+
 ## [0.2.0] — 2026-06-02
 
 ### Added
