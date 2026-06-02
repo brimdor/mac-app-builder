@@ -189,12 +189,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     // MARK: - Window
 
     private func setupWindow() {
-        let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
         let rect = NSRect(x: 0, y: 0, width: 1280, height: 820)
         window = NSWindow(contentRect: rect, styleMask: style, backing: .buffered, defer: false)
         window.title = config.displayName
-        window.titlebarAppearsTransparent = false
-        window.isMovableByWindowBackground = true
         window.minSize = NSSize(width: 800, height: 600)
 
         // Center on the main screen
@@ -206,16 +204,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         }
         window.setFrameAutosaveName("\(config.name)MainWindow")
 
-        // WKWebView. The window's contentView is created lazily when we
-        // access it for the first time, so its bounds may be NSRect.zero
-        // until the window is shown. We size the webView to fill the
-        // window's *content* rect, not the contentView's bounds, so it
-        // gets a sensible size even before the first layout pass.
+        // WKWebView. The contentView is created lazily by Cocoa when we
+        // first access it; its bounds may be NSRect.zero at this point.
+        // We size the webView to the window's content rect (which IS
+        // computed correctly because the window has a frame) and rely
+        // on autoresizingMask to keep it filling as the user resizes.
         let cfg = WKWebViewConfiguration()
         cfg.defaultWebpagePreferences.allowsContentJavaScript = true
         cfg.websiteDataStore = WKWebsiteDataStore.default()
-        let initialFrame = window.contentRect(forFrameRect: window.frame)
-        webView = WKWebView(frame: initialFrame, configuration: cfg)
+        webView = WKWebView(frame: window.contentRect(forFrameRect: window.frame), configuration: cfg)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
