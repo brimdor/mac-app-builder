@@ -6,7 +6,7 @@
 name: Odysseus
 display_name: Odysseus
 bundle_id: com.pewdiepie-archdaemon.odysseus
-version: 0.1.0
+version: 0.2.0
 
 runtime: python
 port: 7860
