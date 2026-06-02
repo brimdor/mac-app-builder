@@ -206,15 +206,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         }
         window.setFrameAutosaveName("\(config.name)MainWindow")
 
-        // WKWebView
+        // WKWebView. The window's contentView is created lazily when we
+        // access it for the first time, so its bounds may be NSRect.zero
+        // until the window is shown. We size the webView to fill the
+        // window's *content* rect, not the contentView's bounds, so it
+        // gets a sensible size even before the first layout pass.
         let cfg = WKWebViewConfiguration()
         cfg.defaultWebpagePreferences.allowsContentJavaScript = true
         cfg.websiteDataStore = WKWebsiteDataStore.default()
-        webView = WKWebView(frame: window.contentView!.bounds, configuration: cfg)
+        let initialFrame = window.contentRect(forFrameRect: window.frame)
+        webView = WKWebView(frame: initialFrame, configuration: cfg)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        webView.setValue(false, forKey: "drawsBackground")
+        // NOTE: We deliberately do NOT set drawsBackground=false here. On
+        // macOS 26, this private KVC can cause the webView to render a
+        // black background and never paint the document content even
+        // though the URL loaded successfully. Default opaque white is
+        // what we want — if the webapp's CSS wants transparency it can
+        // opt in.
         window.contentView?.addSubview(webView)
 
         window.makeKeyAndOrderFront(nil)
@@ -368,6 +378,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
 
     // MARK: - WKNavigationDelegate
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        if let url = webView.url?.absoluteString {
+            NSLog("[\(config.name)] webView started loading \(url)")
+        } else {
+            NSLog("[\(config.name)] webView started loading")
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let url = webView.url?.absoluteString {
+            NSLog("[\(config.name)] webView finished loading \(url)")
+        } else {
+            NSLog("[\(config.name)] webView finished loading")
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        NSLog("[\(config.name)] webView failed: \(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        NSLog("[\(config.name)] webView failed provisional: \(error.localizedDescription)")
+    }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
