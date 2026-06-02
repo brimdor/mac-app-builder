@@ -99,6 +99,24 @@ if [ -f "$PER_APP_DIR/Info.plist" ]; then
     # For v1, the per-app's plist fully replaces the wrapper's. (We can do
     # smarter merging later if needed.)
     cp "$PER_APP_DIR/Info.plist" "$APP_OUTPUT/Contents/Info.plist"
+else
+    # No per-app Info.plist, but the per-app's webappify.yaml has authoritative
+    # values for bundle_id, display_name, version. Sync them into the
+    # wrapper's Info.plist so the running .app has the right identity.
+    echo "▶ Syncing Info.plist with webappify.yaml"
+    BUNDLE_ID=$(grep '^bundle_id:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^bundle_id:[[:space:]]*//')
+    DISPLAY_NAME=$(grep '^display_name:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^display_name:[[:space:]]*//')
+    VERSION=$(grep '^version:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^version:[[:space:]]*//')
+    if [ -n "$BUNDLE_ID" ]; then
+        /usr/bin/plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$APP_OUTPUT/Contents/Info.plist"
+    fi
+    if [ -n "$DISPLAY_NAME" ]; then
+        /usr/bin/plutil -replace CFBundleDisplayName -string "$DISPLAY_NAME" "$APP_OUTPUT/Contents/Info.plist"
+    fi
+    if [ -n "$VERSION" ]; then
+        /usr/bin/plutil -replace CFBundleVersion -string "$VERSION" "$APP_OUTPUT/Contents/Info.plist"
+        /usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP_OUTPUT/Contents/Info.plist"
+    fi
 fi
 
 # ── 7. Ad-hoc code sign ────────────────────────────────────────────────────
