@@ -27,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     private var webView: WKWebView!
     private var server: ServerManager!
     private var firstRunWizard: FirstRunWindowController?
+    private var updater: Updater!
 
     // ── Lifecycle ──
 
@@ -318,12 +319,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         server = ServerManager(config: config)
         server.onReady = { [weak self] in
             self?.loadUI()
+            // Start the updater AFTER the server is up. This avoids
+            // Sparkle prompting during first-run setup, and ensures
+            // the user has a working app to return to if they reject
+            // the update.
+            self?.startUpdater()
         }
         do {
             try server.start()
         } catch {
             showFatalError("Failed to start server", message: "\(error.localizedDescription)")
         }
+    }
+
+    private func startUpdater() {
+        updater = Updater(config: config)
+        updater.start()
     }
 
     private func loadUI() {
@@ -358,13 +369,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
 
     @objc func checkForUpdates() {
-        // v1: no Sparkle. Show a placeholder alert.
-        let alert = NSAlert()
-        alert.messageText = "Update check"
-        alert.informativeText = "In-app updates are not yet wired up. The configured update feed is:\n\n\(config.updateFeed ?? "(not set)")\n\nSee the mac-app-builder project for v1.1 update support."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        if let u = updater {
+            u.checkForUpdates()
+        } else {
+            // Updater hasn't started yet (e.g. server isn't ready).
+            // Show a small alert so the user gets feedback.
+            let alert = NSAlert()
+            alert.messageText = "Update check"
+            alert.informativeText = "The updater hasn't started yet. Please try again in a few seconds, after the app has finished loading."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
 
     @objc func showAbout() {

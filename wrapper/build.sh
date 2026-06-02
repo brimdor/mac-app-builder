@@ -1,48 +1,93 @@
 #!/bin/bash
-# wrapper/build.sh — compiles the reference wrapper Swift sources into a
-# bare .app bundle. The per-app build pipeline (ci/build-app.sh) calls
-# this and then customizes the result for the specific per-app.
+# wrapper/build.sh — builds the reference wrapper Swift code into a bare
+# .app bundle skeleton, using Swift Package Manager.
+#
+# The wrapper is a SwiftPM package (see Package.swift) that depends on
+# Sparkle. SPM handles compiling the wrapper sources AND resolving the
+# Sparkle binary distribution. The result is a small, fast release build
+# with Sparkle.framework embedded alongside the binary.
 #
 # Usage:
 #   ./wrapper/build.sh <app-name> <output-path>
-#
-# Example:
 #   ./wrapper/build.sh Odysseus /tmp/Odysseus-skel.app
 #
 # This produces a .app with:
-#   - MacOS/Odysseus           (Swift binary)
-#   - Info.plist              (from Resources/Info.plist.tmpl, with name substituted)
-#   - webappify.yaml          (NOT included — added by per-app build)
-#   - icon.icns               (NOT included — added by per-app build)
-#   - app/                    (NOT included — added by per-app build)
-#   - runtime/                (NOT included — added by per-app build)
+#   - MacOS/<app-name>             (Swift binary)
+#   - Frameworks/Sparkle.framework (Sparkle 2.x, linked from SPM build)
+#   - Info.plist                  (from Resources/Info.plist.tmpl)
+#   - Resources/                  (empty — per-app build adds stuff here)
+#   - PkgInfo
 #
-# The per-app build adds all the app-specific resources.
+# Per-app customization: if apps/<name>/wrapper/Sources/*.swift exists,
+# the per-app's build pipeline can copy those files in (but for v1.1
+# we use a single unified wrapper with the per-app customizing via
+# webappify.yaml; the per-app Sources/ dir is reserved for future use).
 
 set -euo pipefail
 
 WRAPPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="${1:-TestApp}"
 OUTPUT_PATH="${2:-/tmp/$APP_NAME.app}"
+BUILD_CONFIG="${3:-release}"   # debug or release
 
 if [ -z "$APP_NAME" ] || [ -z "$OUTPUT_PATH" ]; then
-    echo "usage: $0 <app-name> <output-path>"
+    echo "usage: $0 <app-name> <output-path> [build-config]"
+    echo "  example: ./wrapper/build.sh Odysseus /tmp/Odysseus.app release"
     exit 1
 fi
-
-echo "▶ Building $APP_NAME (reference wrapper)"
-echo "  output: $OUTPUT_PATH"
 
 # Find Swift toolchain
-SWIFT="/usr/bin/swiftc"
-if [ ! -x "$SWIFT" ]; then
-    echo "✗ swiftc not found at $SWIFT — install Xcode or Command Line Tools"
+SWIFT_BUILD="/usr/bin/swift"
+if [ ! -x "$SWIFT_BUILD" ]; then
+    echo "✗ swift not found at $SWIFT_BUILD — install Xcode or Command Line Tools"
     exit 1
 fi
 
-# Prepare bundle skeleton
+echo "▶ Building $APP_NAME (SPM wrapper, $BUILD_CONFIG)"
+echo "  wrapper: $WRAPPER_DIR"
+echo "  output:  $OUTPUT_PATH"
+
+# ── 1. Resolve the Sparkle dependency & compile the wrapper via SPM ───────
+echo
+echo "▶ Running swift build"
+cd "$WRAPPER_DIR"
+"$SWIFT_BUILD" build -c "$BUILD_CONFIG" 2>&1 | tail -5
+
+# Find the resulting binary. SPM puts it in
+# .build/<arch>-apple-macosx/<config>/wrapper
+SWIFT_BUILD_DIR="$WRAPPER_DIR/.build/$(uname -m | sed 's/arm64/arm64/')-apple-macosx/$BUILD_CONFIG"
+if [ ! -f "$SWIFT_BUILD_DIR/wrapper" ]; then
+    # Try the alternate form
+    SWIFT_BUILD_DIR=$(find "$WRAPPER_DIR/.build" -name "wrapper" -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
+    if [ -z "$SWIFT_BUILD_DIR" ] || [ ! -f "$SWIFT_BUILD_DIR/wrapper" ]; then
+        echo "✗ Could not find built wrapper binary"
+        exit 1
+    fi
+fi
+WRAPPER_BINARY="$SWIFT_BUILD_DIR/wrapper"
+echo "  binary: $WRAPPER_BINARY ($(du -h "$WRAPPER_BINARY" | cut -f1))"
+
+# Find the Sparkle.framework that SPM downloaded
+SPARKLE_FRAMEWORK=$(find "$WRAPPER_DIR/.build" -name "Sparkle.framework" -type d 2>/dev/null | head -1)
+if [ -z "$SPARKLE_FRAMEWORK" ]; then
+    echo "✗ Could not find Sparkle.framework"
+    exit 1
+fi
+echo "  sparkle: $SPARKLE_FRAMEWORK"
+
+# ── 2. Prepare bundle skeleton ────────────────────────────────────────────
+echo
+echo "▶ Preparing bundle skeleton"
 rm -rf "$OUTPUT_PATH"
-mkdir -p "$OUTPUT_PATH/Contents/MacOS" "$OUTPUT_PATH/Contents/Resources"
+mkdir -p "$OUTPUT_PATH/Contents/MacOS" "$OUTPUT_PATH/Contents/Resources" "$OUTPUT_PATH/Contents/Frameworks"
+
+# Copy the wrapper binary
+cp "$WRAPPER_BINARY" "$OUTPUT_PATH/Contents/MacOS/$APP_NAME"
+chmod +x "$OUTPUT_PATH/Contents/MacOS/$APP_NAME"
+
+# Copy Sparkle.framework into Contents/Frameworks
+cp -R "$SPARKLE_FRAMEWORK" "$OUTPUT_PATH/Contents/Frameworks/"
+echo "  copied Sparkle.framework → Contents/Frameworks/"
 
 # Info.plist from template
 APP_NAME="$APP_NAME" sed -e "s|\${APP_NAME}|$APP_NAME|g" \
@@ -51,26 +96,7 @@ APP_NAME="$APP_NAME" sed -e "s|\${APP_NAME}|$APP_NAME|g" \
 # PkgInfo
 echo "APPL????" > "$OUTPUT_PATH/Contents/PkgInfo"
 
-# Compile Swift sources
-# SOURCES_DIR can be overridden to use per-app customized sources instead of
-# the reference. Default is the reference's own Sources/ directory.
-SOURCES_DIR="${SOURCES_DIR:-$WRAPPER_DIR/Sources}"
-echo "  compiling Swift…"
-SWIFT_SOURCES=()
-while IFS= read -r f; do
-    SWIFT_SOURCES+=("$f")
-done < <(find "$SOURCES_DIR" -maxdepth 1 -name '*.swift' -type f | sort)
-echo "  sources dir: $SOURCES_DIR"
-for src in "${SWIFT_SOURCES[@]}"; do
-    echo "    $(basename "$src")"
-done
-
-xcrun "$SWIFT" \
-    -O \
-    -target "$(uname -m)-apple-macosx11.0" \
-    -framework Cocoa -framework WebKit \
-    -o "$OUTPUT_PATH/Contents/MacOS/$APP_NAME" \
-    "${SWIFT_SOURCES[@]}"
-
-echo "  binary: $OUTPUT_PATH/Contents/MacOS/$APP_NAME ($(du -h "$OUTPUT_PATH/Contents/MacOS/$APP_NAME" | cut -f1))"
+echo
 echo "✓ Built $OUTPUT_PATH"
+echo "  size:  $(du -sh "$OUTPUT_PATH" | cut -f1)"
+echo "  files: $(find "$OUTPUT_PATH" -type f | wc -l | tr -d ' ')"

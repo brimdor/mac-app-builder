@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Odysseus</title>
+    <link>file:///Users/chris/Code/mac-app-builder/dist/Odysseus-0.3.0.dmg</link>
+    <description>Updates for Odysseus, built with mac-app-builder.</description>
+    <language>en</language>
+    
+    <item>
+      <title>Odysseus 0.3.0</title>
+      <pubDate>Tue, 02 Jun 2026 22:21:33 +0000</pubDate>
+      <sparkle:version>1</sparkle:version>
+      <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+      <enclosure url="file:///Users/chris/Code/mac-app-builder/dist/Odysseus-0.3.0.dmg"
+                 sparkle:edSignature="/9QZ7jEVmqOtiSGDRyOw8KGm93eIZmqq3ahop2KT1UkXtp9Hs+GxwNGry+nnlZOv2VVa2DwaOFn+L9OY4uXdDQ=="
+                 length="283358625"
+                 type="application/x-apple-diskimage" />
+    </item>
+  </channel>
+</rss>

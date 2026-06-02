@@ -46,3 +46,9 @@ test-output/
 .env
 .env.local
 secrets/
+
+# Update-signing private keys (public keys ARE committed; private keys
+# must NEVER be committed. The public key file is needed at build time
+# to embed in Info.plist as SUPublicEDKey.)
+keys/*_private.pem
+keys/*.key

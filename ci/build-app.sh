@@ -92,17 +92,51 @@ else
     echo "▶ No icon found (icon.png or icon.icns); the .app will use the system default"
 fi
 
+# ── 5. Embed Sparkle public key + feed URL (if available) ─────────────────
+# Sparkle verifies update signatures against SUPublicEDKey in Info.plist.
+# The public key is a base64-encoded 32-byte Ed25519 public key.
+# Source: keys/<app>_update_public.txt (committed to the repo).
+SPARKLE_PUBKEY=""
+if [ -f "$REPO_ROOT/keys/${APP_NAME}_update_public.txt" ]; then
+    SPARKLE_PUBKEY=$(tr -d '\n' < "$REPO_ROOT/keys/${APP_NAME}_update_public.txt")
+    if [ -n "$SPARKLE_PUBKEY" ]; then
+        echo
+        echo "▶ Embedding Sparkle public key (SUPublicEDKey)"
+        /usr/bin/plutil -replace SUPublicEDKey -string "$SPARKLE_PUBKEY" "$APP_OUTPUT/Contents/Info.plist"
+        echo "  ✓ SUPublicEDKey set (length: $(echo -n "$SPARKLE_PUBKEY" | wc -c | tr -d ' ') chars)"
+    fi
+fi
+
+# Embed the Sparkle feed URL (SUFeedURL) from webappify.yaml's
+# `update_feed:` field. This is the URL to the appcast.xml.
+SPARKLE_FEED_URL=$(grep '^update_feed:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^update_feed:[[:space:]]*//')
+if [ -n "$SPARKLE_FEED_URL" ]; then
+    echo
+    echo "▶ Embedding Sparkle feed URL (SUFeedURL)"
+    /usr/bin/plutil -replace SUFeedURL -string "$SPARKLE_FEED_URL" "$APP_OUTPUT/Contents/Info.plist"
+    echo "  ✓ SUFeedURL set: $SPARKLE_FEED_URL"
+fi
+
 # ── 6. Per-app Info.plist overrides (optional) ────────────────────────────
 if [ -f "$PER_APP_DIR/Info.plist" ]; then
+    echo
     echo "▶ Applying per-app Info.plist overrides"
     # Merge the per-app's Info.plist on top of the wrapper's.
     # For v1, the per-app's plist fully replaces the wrapper's. (We can do
     # smarter merging later if needed.)
     cp "$PER_APP_DIR/Info.plist" "$APP_OUTPUT/Contents/Info.plist"
+    # Re-apply SUPublicEDKey and SUFeedURL since we just overwrote Info.plist
+    if [ -n "${SPARKLE_PUBKEY:-}" ]; then
+        /usr/bin/plutil -replace SUPublicEDKey -string "$SPARKLE_PUBKEY" "$APP_OUTPUT/Contents/Info.plist"
+    fi
+    if [ -n "${SPARKLE_FEED_URL:-}" ]; then
+        /usr/bin/plutil -replace SUFeedURL -string "$SPARKLE_FEED_URL" "$APP_OUTPUT/Contents/Info.plist"
+    fi
 else
     # No per-app Info.plist, but the per-app's webappify.yaml has authoritative
     # values for bundle_id, display_name, version. Sync them into the
     # wrapper's Info.plist so the running .app has the right identity.
+    echo
     echo "▶ Syncing Info.plist with webappify.yaml"
     BUNDLE_ID=$(grep '^bundle_id:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^bundle_id:[[:space:]]*//')
     DISPLAY_NAME=$(grep '^display_name:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^display_name:[[:space:]]*//')
@@ -122,8 +156,14 @@ fi
 # ── 7. Ad-hoc code sign ────────────────────────────────────────────────────
 echo
 echo "▶ Ad-hoc code signing"
-codesign --force --deep --sign - "$APP_OUTPUT"
-codesign --verify --verbose=2 "$APP_OUTPUT" 2>&1 | head -5 | sed 's/^/  /'
+# We sign the inner frameworks first (Sparkle), then the app itself with --deep.
+# Order matters: nested code must be signed before the outer.
+for fw in "$APP_OUTPUT/Contents/Frameworks"/*.framework; do
+    [ -d "$fw" ] || continue
+    codesign --force --sign - "$fw" 2>&1 | sed 's/^/  /'
+done
+codesign --force --deep --sign - "$APP_OUTPUT" 2>&1 | sed 's/^/  /'
+codesign --verify --verbose=2 "$APP_OUTPUT" 2>&1 | head -3 | sed 's/^/  /'
 
 # ── 8. Print summary ───────────────────────────────────────────────────────
 echo

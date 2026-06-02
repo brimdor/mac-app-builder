@@ -27,5 +27,13 @@
             </dict>
         </dict>
     </dict>
+    <!-- Sparkle 2.x auto-update. SUPublicEDKey is the base64-encoded
+         32-byte Ed25519 public key. It's populated at build time by
+         ci/build-app.sh from keys/<app>_update_public.txt. -->
+    <key>SUPublicEDKey</key>                <string>REPLACE_AT_BUILD_TIME</string>
+    <!-- SUFeedURL is the URL of the appcast.xml. It can be overridden
+         in code via SPUUpdaterDelegate.feedURLStringForUpdater, but
+         setting it in Info.plist is the recommended approach. -->
+    <key>SUFeedURL</key>                    <string>REPLACE_AT_BUILD_TIME</string>
 </dict>
 </plist>

@@ -55,3 +55,15 @@ env:
 #     type: password
 #     env: ODYSSEUS_ADMIN_PASSWORD
 #     required: true
+
+# Sparkle update feed (v1.1). The wrapper reads this and embeds it as
+# `SUFeedURL` in Info.plist at build time. Sparkle fetches this URL on
+# launch (and on a 24h interval) to check for new releases.
+#
+# For dev/testing, point at a local HTTP server. The ci/test-update.sh
+# script runs one on port 9999.
+# update_feed: http://127.0.0.1:9999/appcast.xml
+#
+# For production, point at the public appcast (hosted via GitHub Pages,
+# S3, or any HTTPS endpoint reachable by end users):
+update_feed: http://127.0.0.1:9999/appcast.xml

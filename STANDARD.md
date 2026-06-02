@@ -301,22 +301,94 @@ The bundle ID must be unique on the user's system. Two per-apps with the same bu
 
 ## 9. Update flow
 
-v1 uses [Sparkle](https://sparkle-project.org/) for in-app updates. Every `.app` must:
+v1.1 uses [Sparkle 2.x](https://sparkle-project.org/) for in-app updates. Every `.app` MUST:
 
-- Include `Sparkle.framework` in `Contents/Resources/frameworks/`
+- Include `Sparkle.framework` in `Contents/Frameworks/`
 - Set `SUFeedURL` and `SUPublicEDKey` in `Info.plist`
-- Implement `Help → Check for Updates…` calling Sparkle's updater
-- Use EdDSA signatures for update integrity (Sparkle 2.x default)
+- Implement `Help → Check for Updates…` calling `SPUUpdater.checkForUpdates()`
+- Use EdDSA (Ed25519) signatures on each released `.dmg` (Sparkle's default)
 
-The appcast XML lives at `SUFeedURL` and lists each version with its `.dmg` URL, size, and EdDSA signature. The CI pipeline generates this file and uploads it alongside each `.dmg` to a known location (GitHub Releases for public apps, S3 / private CDN for private ones).
+### 9.1 Appcast.xml
 
-For v1, the simplest pattern is:
+The appcast XML lives at the URL configured in `SUFeedURL` (or `webappify.yaml`'s `update_feed:` field). It is an RSS-like document with one `<item>` per release:
 
-1. Each new version of a per-app is a GitHub Release in the `mac-app-builder` repo, with the `.dmg` attached.
-2. The `appcast.xml` is generated from the GitHub Releases API and committed back to the repo.
-3. The per-app's `SUFeedURL` points to `https://brimdor.github.io/mac-app-builder/odysseus/appcast.xml` (or similar, hosted on GitHub Pages).
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Odysseus</title>
+    <item>
+      <title>Odysseus 0.3.0</title>
+      <pubDate>Mon, 02 Jun 2026 12:00:00 +0000</pubDate>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+      <enclosure url="https://github.com/.../Odysseus-0.3.0.dmg"
+                 sparkle:edSignature="base64-encoded-64-byte-sig"
+                 length="284567890"
+                 type="application/x-apple-diskimage" />
+    </item>
+  </channel>
+</rss>
+```
 
-For v1.1+, this becomes fully automated in CI.
+`sparkle:edSignature` is the base64-encoded **64-byte** Ed25519 signature of the `.dmg` file's contents. `length` is the `.dmg` size in bytes. `sparkle:version` is a monotonically increasing integer (separate from `shortVersionString`).
+
+### 9.2 Build / publish flow
+
+1. **Tag a release**: `git tag v0.3.0` and push.
+2. **CI builds** the `.app` for each per-app via `ci/build-app.sh`.
+3. **CI packages** the `.dmg` via `ci/package-dmg.sh`.
+4. **CI signs** the `.dmg` with the per-app's Ed25519 private key (from a GitHub Actions secret).
+5. **CI creates a GitHub Release** with the `.dmg` attached.
+6. **CI regenerates** `appcasts/<app>.xml` with the new item and commits it to the repo.
+7. **CI deploys** the appcast (commit to `main`, GitHub Pages, or a public S3 bucket).
+
+### 9.3 User flow
+
+1. User has v0.2.1 installed.
+2. User launches the app.
+3. Sparkle (background) fetches the appcast and finds v0.3.0.
+4. Sparkle shows "Odysseus 0.3.0 is available" with release notes.
+5. User clicks Install.
+6. Sparkle downloads the `.dmg`, verifies the EdDSA signature against `SUPublicEDKey` baked into the .app.
+7. Sparkle asks the user to quit the app.
+8. After the user quits, Sparkle replaces the .app in `/Applications/`.
+9. User relaunches and is on v0.3.0.
+
+### 9.4 Trust model
+
+- The **public key** (in `Info.plist`'s `SUPublicEDKey`) is committed to the repo and shipped with every `.app`.
+- The **private key** lives ONLY in the CI environment (GitHub Actions secret). It is never committed and never leaves CI.
+- A man-in-the-middle can substitute a fake appcast.xml, but Sparkle rejects updates whose `.dmg` signature doesn't match the public key. The MITM would need the private key, which is in CI.
+
+### 9.5 Generating keys
+
+```bash
+SEED=$(openssl rand -hex 32)   # for production
+python3 tools/generate_keys.py <app-name>
+# Produces:
+#   keys/<app>_update_private.pem   (DO NOT COMMIT — put in GitHub secret)
+#   keys/<app>_update_public.txt    (commit this; 32-byte Ed25519 pub key, base64)
+```
+
+`SEED` makes the key generation deterministic for testing.
+
+### 9.6 Configuring the per-app
+
+In `apps/<name>/webappify.yaml`:
+
+```yaml
+# Required for updates to work. The URL of the appcast.xml.
+update_feed: https://brimdor.github.io/mac-app-builder/appcasts/odysseus.xml
+# Or for development:
+# update_feed: http://127.0.0.1:9999/appcast.xml
+```
+
+At build time, this is copied into `Info.plist`'s `SUFeedURL` by `ci/build-app.sh`.
+
+### 9.7 Manual update check
+
+`Help → Check for Updates…` triggers `SPUUpdater.checkForUpdates()` which shows Sparkle's standard "Checking / Update available / No updates" UI. This works whether the updater is in automatic mode or not.
 
 ---
 
