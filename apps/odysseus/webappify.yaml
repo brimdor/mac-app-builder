@@ -6,10 +6,10 @@
 name: Odysseus
 display_name: Odysseus
 bundle_id: com.pewdiepie-archdaemon.odysseus
-version: 0.3.0
+version: 0.3.1
 # Integer build number for Sparkle update comparison.
 # Must increase monotonically for each release.
-build_number: 2
+build_number: 3
 
 runtime: python
 port: 7860
