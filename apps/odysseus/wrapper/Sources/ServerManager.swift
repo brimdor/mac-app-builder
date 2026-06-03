@@ -51,24 +51,36 @@ final class ServerManager {
             }
         }
 
-        // Kill any orphaned process still holding our port. After a Sparkle
+        // Kill any orphaned processes still holding our port. After a Sparkle
         // update the old Python server survives as an orphan (macOS doesn't
         // auto-kill child processes when the parent exits). If we don't clean
         // it up, the new server fails to bind the port and the UI stays black.
+        //
+        // CRITICAL: lsof -ti can return MULTIPLE PIDs (e.g. parent + child
+        // processes). We must parse and kill every one, then verify the
+        // port is truly free before starting the new server.
         let portString = String(config.port)
-        if let lsof = Process.run(["/usr/sbin/lsof", "-ti", ":\(portString)"]),
-           let pidStr = String(data: lsof, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           let pid = Int32(pidStr), pid > 0 {
-            NSLog("[\(config.name)] killing orphaned server (pid=\(pid)) still holding port \(portString)")
-            kill(pid, SIGKILL)
-            // Wait briefly for the socket to be released
-            var retries = 0
-            while retries < 50 {
-                if Process.run(["/usr/sbin/lsof", "-ti", ":\(portString)"]) == nil {
-                    break
+        if let lsofData = Process.run(["/usr/sbin/lsof", "-ti", ":\(portString)"]),
+           let lsofOutput = String(data: lsofData, encoding: .utf8) {
+            let pids = lsofOutput
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .compactMap { Int32($0) }
+                .filter { $0 > 0 }
+            if !pids.isEmpty {
+                NSLog("[\(config.name)] found \(pids.count) orphan(s) on port \(portString): \(pids)")
+                for pid in pids {
+                    kill(pid, SIGKILL)
                 }
-                Thread.sleep(forTimeInterval: 0.05)
-                retries += 1
+                // Wait up to 2.5 s for socket release
+                var retries = 0
+                while retries < 50 {
+                    if Process.run(["/usr/sbin/lsof", "-ti", ":\(portString)"]) == nil {
+                        break
+                    }
+                    Thread.sleep(forTimeInterval: 0.05)
+                    retries += 1
+                }
             }
         }
 
