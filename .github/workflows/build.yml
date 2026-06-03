@@ -29,6 +29,7 @@ jobs:
 
       - name: Set up Python (for the build pipeline + Odysseus venv)
         uses: actions/setup-python@v5
+        id: python
         with:
           python-version: '3.11'
 

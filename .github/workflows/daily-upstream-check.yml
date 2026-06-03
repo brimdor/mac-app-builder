@@ -12,6 +12,10 @@ concurrency:
   group: upstream-check-${{ github.ref }}
   cancel-in-progress: false
 
+# Need write permission to push version bumps, tags, and trigger releases
+permissions:
+  contents: write
+
 jobs:
   check-upstream:
     name: Check upstream Odysseus

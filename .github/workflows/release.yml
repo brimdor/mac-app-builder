@@ -14,6 +14,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false   # don't cancel a release in progress
 
+# Need write permission to create releases, upload assets, and push appcast commits
+permissions:
+  contents: write
+
 jobs:
   release:
     name: Build & publish ${{ matrix.app }} ${{ github.ref_name }}
