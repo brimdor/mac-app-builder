@@ -1,34 +1,29 @@
 name: Daily upstream update check
 
-# Run every day at 6:00 UTC (pick a quiet time)
 on:
   schedule:
     - cron: '0 6 * * *'
-  # Allow manual trigger for testing
   workflow_dispatch:
 
-# Prevent concurrent runs
 concurrency:
   group: upstream-check-${{ github.ref }}
   cancel-in-progress: false
 
-# Need write permission to push version bumps, tags, and trigger releases
 permissions:
   contents: write
 
 jobs:
   check-upstream:
     name: Check upstream Odysseus
-    runs-on: ubuntu-latest  # lightweight — just clones + compares commits
+    runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
       - name: Checkout mac-app-builder
         uses: actions/checkout@v4
         with:
-          # Need full history to create tags
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -39,8 +34,6 @@ jobs:
         id: check
         run: |
           ./ci/check-upstream.sh odysseus
-          # If check-upstream exits 0 (no update), this step succeeds.
-          # If it creates a tag, we capture it.
           if git describe --tags --exact-match HEAD 2>/dev/null; then
             TAG=$(git describe --tags --exact-match HEAD)
             echo "NEW_TAG=$TAG" >> "$GITHUB_OUTPUT"
@@ -52,6 +45,8 @@ jobs:
 
       - name: Push version bump + tag
         if: steps.check.outputs.NEW_TAG != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_GITHUB_TOKEN }}
         run: |
           git push origin main
           git push origin "${{ steps.check.outputs.NEW_TAG }}"
@@ -59,9 +54,7 @@ jobs:
       - name: Summarize
         run: |
           if [ -n "${{ steps.check.outputs.NEW_TAG }}" ]; then
-            echo "✅ New upstream release triggered: ${{ steps.check.outputs.NEW_TAG }}"
-            echo "   The release workflow (.github/workflows/release.yml) will now"
-            echo "   build, sign, and publish the updated .app on a macOS runner."
+            echo "New upstream release triggered: ${{ steps.check.outputs.NEW_TAG }}"
           else
-            echo "✅ Upstream is up to date. No release needed."
+            echo "Upstream is up to date. No release needed."
           fi
