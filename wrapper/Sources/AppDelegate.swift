@@ -26,8 +26,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var server: ServerManager!
-    private var firstRunWizard: FirstRunWindowController?
     private var updater: Updater!
+    private var cookiePreserver: CookiePreserver!
 
     // ── Lifecycle ──
 
@@ -42,140 +42,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         NSLog("[\(config.name)] launching (bundleId=\(config.bundleId), port=\(config.port))")
         log("\(config.displayName) launching")
 
-        // First-run detection: if the user database doesn't exist in the
-        // data dir, we need to collect admin credentials before starting the
-        // server. Show a native wizard.
-        if isFirstLaunch() {
-            showFirstRunWizard()
-        } else {
-            setupMenuBar()
-            setupWindow()
-            startServer()
-        }
-    }
-
-    private func isFirstLaunch() -> Bool {
-        let dbPath = config.dataDir + "/app.db"
-        let authPath = config.dataDir + "/auth.json"
-        // First launch = neither the database nor the auth file exists.
-        // The auth file is what setup.py creates on a successful first run.
-        return !FileManager.default.fileExists(atPath: dbPath) &&
-               !FileManager.default.fileExists(atPath: authPath)
-    }
-
-    private func showFirstRunWizard() {
-        // Set up the menu bar (so Quit works) and a minimal main window
-        // (so the app has a presence). The wizard appears on top.
+        // Start the server immediately. The upstream app (Odysseus) handles
+        // its own first-time setup via the web UI when the user navigates to
+        // it. No native wizard needed.
         setupMenuBar()
         setupWindow()
-        window.title = "Welcome to \(config.displayName)"
-
-        let wizard = FirstRunWindowController(
-            appName: config.displayName,
-            bundleId: config.bundleId,
-            dataDir: config.dataDir
-        )
-        wizard.onComplete = { [weak self] result in
-            self?.runFirstRunSetup(result)
-        }
-        wizard.onCancel = {
-            NSApp.terminate(nil)
-        }
-        firstRunWizard = wizard
-        wizard.present()
-    }
-
-    private func runFirstRunSetup(_ result: FirstRunResult) {
-        firstRunWizard?.setRunning(true)
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let strongSelf = self else { return }
-            do {
-                try strongSelf.runSetupPy(username: result.username, password: result.password) { message in
-                    // Stream setup output to the wizard
-                    DispatchQueue.main.async { [weak self] in
-                        self?.firstRunWizard?.showError(message)
-                    }
-                }
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    self.firstRunWizard?.setRunning(false)
-                    // Verify setup actually created auth.json
-                    let authPath = self.config.dataDir + "/auth.json"
-                    if FileManager.default.fileExists(atPath: authPath) {
-                        // Success! Dismiss the wizard and start the server.
-                        self.firstRunWizard?.window?.orderOut(nil)
-                        self.firstRunWizard = nil
-                        self.window.title = self.config.displayName
-                        self.startServer()
-                    } else {
-                        self.firstRunWizard?.showError(
-                            "Setup did not create \(authPath). Check the server log for details."
-                        )
-                    }
-                }
-            } catch {
-                DispatchQueue.main.async { [weak self] in
-                    self?.firstRunWizard?.setRunning(false)
-                    self?.firstRunWizard?.showError("Setup failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    private func runSetupPy(username: String, password: String, onLog: @escaping (String) -> Void) throws {
-        // The setup script is at <app>/setup.py. We invoke the bundled
-        // Python with PYTHONPATH pointing at the bundled site-packages.
-        let resourcesPath = Bundle.main.resourcePath ?? NSTemporaryDirectory()
-        let program = resourcesPath + "/runtime/python/bin/python3"
-        let setupScript = config.appDir + "/setup.py"
-        guard FileManager.default.isExecutableFile(atPath: program) else {
-            throw NSError(domain: "FirstRun", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bundled Python not found at \(program)"])
-        }
-        guard FileManager.default.fileExists(atPath: setupScript) else {
-            throw NSError(domain: "FirstRun", code: 2, userInfo: [NSLocalizedDescriptionKey: "setup.py not found in the app bundle"])
-        }
-
-        // Make sure data/logs dirs exist
-        try? FileManager.default.createDirectory(atPath: config.dataDir, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(atPath: config.logsDir, withIntermediateDirectories: true)
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: program)
-        proc.arguments = [setupScript]
-        proc.currentDirectoryURL = URL(fileURLWithPath: config.appDir)
-
-        var env = ProcessInfo.processInfo.environment
-        env["PYTHONPATH"] = resourcesPath + "/runtime/site-packages"
-        env["DATA_DIR"] = config.dataDir
-        env["LOGS_DIR"] = config.logsDir
-        env["CACHE_DIR"] = config.cacheDir
-        env["ODYSSEUS_ADMIN_USER"] = username
-        env["ODYSSEUS_ADMIN_PASSWORD"] = password
-        env["ODYSSEUS_SKIP_RUN_HINT"] = "1"
-        proc.environment = env
-
-        let outPipe = Pipe()
-        proc.standardOutput = outPipe
-        proc.standardError = outPipe
-
-        // Read output line-by-line and forward to the wizard
-        outPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty { return }
-            if let text = String(data: data, encoding: .utf8) {
-                onLog(text)
-            }
-        }
-
-        try proc.run()
-        proc.waitUntilExit()
-        outPipe.fileHandleForReading.readabilityHandler = nil
-
-        if proc.terminationStatus != 0 {
-            throw NSError(domain: "FirstRun", code: Int(proc.terminationStatus),
-                          userInfo: [NSLocalizedDescriptionKey: "setup.py exited with code \(proc.terminationStatus). Check the log for details."])
-        }
+        startServer()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -184,6 +56,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         log("\(config.displayName) terminating")
+        cookiePreserver?.stop()
         server?.stop()
     }
 
@@ -196,28 +69,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         window.title = config.displayName
         window.minSize = NSSize(width: 800, height: 600)
 
-        // Center on the main screen. We compute the centered origin
-        // from the *primary* screen's visibleFrame. This is the only
-        // setFrame call — we deliberately do NOT use
-        // setFrameAutosaveName because on macOS 26 with multi-monitor
-        // setups, the autosave restoration can move the window off
-        // screen on subsequent launches (we've observed y=-1114 with
-        // the user's 3-monitor setup). Each launch centers the window
-        // freshly, which is the standard behavior for first-launch
-        // apps and is also what `NSWindow.center()` does. The user
-        // can still drag the window; we just don't persist that
-        // position between launches.
-        if let screen = NSScreen.main {
+        // CRITICAL FIX for multi-monitor setups and Sparkle relaunch:
+        // On macOS 15+ with multiple monitors, the window can be placed
+        // at negative coordinates (e.g. y=-1268) which places it on a
+        // secondary monitor or off-screen entirely. This makes the app
+        // appear as a "black screen" because the window is visible but
+        // positioned where the user can't see it properly.
+        //
+        // We ALWAYS center on the MAIN screen (the one with the menu bar,
+        // which has frame.origin at (0,0)). We ignore any autosaved
+        // positions because Sparkle relaunch can corrupt the saved position.
+        window.setFrameAutosaveName("")
+        
+        // Find the main screen: it's the one with frame.origin == (0,0)
+        let mainScreen = NSScreen.screens.first { $0.frame.origin == .zero }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        
+        if let screen = mainScreen {
             let sf = screen.visibleFrame
-            NSLog("[\(config.name)] NSScreen.main visibleFrame: \(sf)")
             let x = sf.origin.x + (sf.width - rect.width) / 2
             let y = sf.origin.y + (sf.height - rect.height) / 2
-            NSLog("[\(config.name)] centering window at (\(x), \(y)) with size \(rect.size)")
-            window.setFrame(NSRect(x: x, y: y, width: rect.width, height: rect.height), display: true)
-            NSLog("[\(config.name)] window frame after setFrame: \(window.frame)")
+            let clampedX = max(sf.origin.x, min(x, sf.origin.x + sf.width - rect.width))
+            let clampedY = max(sf.origin.y, min(y, sf.origin.y + sf.height - rect.height))
+            window.setFrame(NSRect(x: clampedX, y: clampedY, width: rect.width, height: rect.height), display: true)
+            NSLog("[\(config.name)] window placed on main screen at (\(clampedX), \(clampedY)) visibleFrame=\(sf)")
         } else {
-            NSLog("[\(config.name)] WARNING: NSScreen.main is nil, falling back to window.center()")
             window.center()
+            NSLog("[\(config.name)] window centered (no screen info)")
         }
 
         // WKWebView. We start with the contentView's *current* bounds
@@ -237,6 +116,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         NSLog("[\(config.name)] window isVisible: \(window.isVisible), screen: \(String(describing: window.screen))")
+
+        // CookiePreserver — mirrors WKWebView cookies to DATA_DIR so the
+        // user's session survives Sparkle updates. When the app is killed
+        // for update, WebKit's SQLite databases can be left corrupt. We
+        // snapshot cookies every 30 s and restore them on launch.
+        cookiePreserver = CookiePreserver(webView: webView, dataDir: config.dataDir)
+        cookiePreserver.start()
     }
 
     // MARK: - Menu bar (standard, app-agnostic)

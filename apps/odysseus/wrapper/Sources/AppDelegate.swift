@@ -69,12 +69,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         window.title = config.displayName
         window.minSize = NSSize(width: 800, height: 600)
 
-        // Center on screen using NSWindow.center() which properly handles
-        // multi-monitor setups. We explicitly disable frame autosave to
-        // prevent stale positions from persisting across launches.
+        // CRITICAL FIX for multi-monitor setups and Sparkle relaunch:
+        // On macOS 15+ with multiple monitors, the window can be placed
+        // at negative coordinates (e.g. y=-1268) which places it on a
+        // secondary monitor or off-screen entirely. This makes the app
+        // appear as a "black screen" because the window is visible but
+        // positioned where the user can't see it properly.
+        //
+        // We ALWAYS center on the MAIN screen (the one with the menu bar,
+        // which has frame.origin at (0,0)). We ignore any autosaved
+        // positions because Sparkle relaunch can corrupt the saved position.
         window.setFrameAutosaveName("")
-        window.center()
-        NSLog("[\(config.name)] window centered at \(window.frame)")
+        
+        // Find the main screen: it's the one with frame.origin == (0,0)
+        let mainScreen = NSScreen.screens.first { $0.frame.origin == .zero }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        
+        if let screen = mainScreen {
+            let sf = screen.visibleFrame
+            let x = sf.origin.x + (sf.width - rect.width) / 2
+            let y = sf.origin.y + (sf.height - rect.height) / 2
+            let clampedX = max(sf.origin.x, min(x, sf.origin.x + sf.width - rect.width))
+            let clampedY = max(sf.origin.y, min(y, sf.origin.y + sf.height - rect.height))
+            window.setFrame(NSRect(x: clampedX, y: clampedY, width: rect.width, height: rect.height), display: true)
+            NSLog("[\(config.name)] window placed on main screen at (\(clampedX), \(clampedY)) visibleFrame=\(sf)")
+        } else {
+            window.center()
+            NSLog("[\(config.name)] window centered (no screen info)")
+        }
 
         // WKWebView. We start with the contentView's *current* bounds
         // (which is correct at this point because the window has a

@@ -48,23 +48,24 @@ echo "  wrapper: $WRAPPER_DIR"
 echo "  output:  $OUTPUT_PATH"
 
 # ── 1. Resolve the Sparkle dependency & compile the wrapper via SPM ───────
-# If SOURCES_DIR is set (per-app customization), temporarily swap the
-# wrapper sources so SPM builds the per-app customized version.
+# If SOURCES_DIR is set (per-app customization), we build from a temporary
+# directory that has the correct Sources/ copied in. This avoids the
+# swap-and-restore race condition that can happen when multiple builds run
+# concurrently or when the trap doesn't fire correctly.
 SOURCES_DIR="${SOURCES_DIR:-$WRAPPER_DIR/Sources}"
 if [ "$SOURCES_DIR" != "$WRAPPER_DIR/Sources" ]; then
     echo "  using per-app sources: $SOURCES_DIR"
-    # Back up reference sources, copy per-app sources in
-    REF_BACKUP="$(mktemp -d)"
-    cp -R "$WRAPPER_DIR/Sources/" "$REF_BACKUP/"
-    rm -rf "$WRAPPER_DIR/Sources"
-    cp -R "$SOURCES_DIR/" "$WRAPPER_DIR/Sources/"
-    # Restore on exit
-    restore_sources() {
-        rm -rf "$WRAPPER_DIR/Sources"
-        cp -R "$REF_BACKUP/" "$WRAPPER_DIR/Sources/"
-        rm -rf "$REF_BACKUP"
-    }
-    trap restore_sources EXIT
+    # Build from a temp dir with the correct Sources/
+    BUILD_TMPDIR="$(mktemp -d)"
+    cp -R "$WRAPPER_DIR/Package.swift" "$BUILD_TMPDIR/" 2>/dev/null || true
+    cp -R "$WRAPPER_DIR/Package.resolved" "$BUILD_TMPDIR/" 2>/dev/null || true
+    cp -R "$SOURCES_DIR/" "$BUILD_TMPDIR/Sources/"
+    # Also copy any other needed files (Resources, etc.)
+    if [ -d "$WRAPPER_DIR/Resources" ]; then
+        cp -R "$WRAPPER_DIR/Resources/" "$BUILD_TMPDIR/Resources/"
+    fi
+    WRAPPER_DIR="$BUILD_TMPDIR"
+    echo "  building from temp dir: $WRAPPER_DIR"
 fi
 
 echo
