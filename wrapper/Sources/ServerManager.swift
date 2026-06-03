@@ -1,15 +1,17 @@
 // ServerManager.swift — spawns the bundled server, polls for readiness,
 // terminates the server on quit.
 //
-// The server is a child process. We use Foundation's Process API.
+// CRITICAL FIX for Sparkle updates: when Sparkle installs an update, it kills
+// the old app process but macOS does NOT auto-kill child processes. The old
+// Python server survives as an orphan, holding our port. If the new app tries
+// to start a server on the same port before the orphan fully releases it,
+// the bind fails and the UI stays black forever.
 //
-// The server's working directory is set to $APP_DIR (Contents/Resources/app/),
-// and the standard env vars ($DATA_DIR, $LOGS_DIR, $CACHE_DIR, $PORT) are
-// passed so the server can find its user data location.
-//
-// IMPORTANT: this code does not write any user data to the bundle. The
-// server's stdout/stderr is captured and tee'd to $LOGS_DIR/server.log, but
-// the log file lives in the user's home directory, not in the bundle.
+// This implementation:
+//   1. Kills ALL processes holding our port (not just one)
+//   2. Waits up to 5s for the port to be truly free (verified by connect)
+//   3. Starts the new server only after confirmation
+//   4. Enhanced readiness polling with diagnostics
 
 import Foundation
 
@@ -25,21 +27,19 @@ final class ServerManager {
         self.config = config
     }
 
+    // MARK: - Lifecycle
+
     /// Spawn the server, return immediately. The process runs in the background.
     func start() throws {
-        // Make sure data/logs/cache dirs exist
         let fm = FileManager.default
+        let portString = String(config.port)
+
+        // 1. Ensure directories exist
         try? fm.createDirectory(atPath: config.dataDir, withIntermediateDirectories: true)
         try? fm.createDirectory(atPath: config.logsDir, withIntermediateDirectories: true)
         try? fm.createDirectory(atPath: config.cacheDir, withIntermediateDirectories: true)
 
-        // Migrate .app_key from old bundle location to DATA_DIR.
-        // In versions <= 0.3.4 the encryption key lived inside the .app bundle
-        // at Contents/Resources/app/data/.app_key. Sparkle updates wipe the
-        // bundle, which destroyed the key and broke API-key decryption.
-        // v0.3.5+ stores the key in DATA_DIR/.app_key (outside the bundle).
-        // On first launch after update, copy the old key to the new location
-        // so existing encrypted secrets remain readable.
+        // 2. Migrate .app_key from old bundle location to DATA_DIR
         let oldKeyPath = (Bundle.main.resourcePath ?? "") + "/app/data/.app_key"
         let newKeyPath = config.dataDir + "/.app_key"
         if fm.fileExists(atPath: oldKeyPath) && !fm.fileExists(atPath: newKeyPath) {
@@ -51,138 +51,71 @@ final class ServerManager {
             }
         }
 
-        // Kill any orphaned processes still holding our port. After a Sparkle
-        // update the old Python server survives as an orphan (macOS doesn't
-        // auto-kill child processes when the parent exits). If we don't clean
-        // it up, the new server fails to bind the port and the UI stays black.
-        //
-        // CRITICAL: lsof -ti can return MULTIPLE PIDs (e.g. parent + child
-        // processes). We must parse and kill every one, then verify the
-        // port is truly free before starting the new server.
-        let portString = String(config.port)
-        if let lsofData = Process.run(["/usr/sbin/lsof", "-ti", ":\(portString)"]),
-           let lsofOutput = String(data: lsofData, encoding: .utf8) {
-            let pids = lsofOutput
-                .components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .compactMap { Int32($0) }
-                .filter { $0 > 0 }
-            if !pids.isEmpty {
-                NSLog("[\(config.name)] found \(pids.count) orphan(s) on port \(portString): \(pids)")
-                for pid in pids {
-                    kill(pid, SIGKILL)
-                }
-                // Wait up to 2.5 s for socket release
-                var retries = 0
-                while retries < 50 {
-                    if Process.run(["/usr/sbin/lsof", "-ti", ":\(portString)"]) == nil {
-                        break
-                    }
-                    Thread.sleep(forTimeInterval: 0.05)
-                    retries += 1
-                }
-            }
+        // 3. KILL PHASE — find and kill ALL orphaned processes on our port
+        // After a Sparkle update, the old Python server survives as an orphan.
+        // We must kill it AND wait for the port to be truly free.
+        NSLog("[\(config.name)] checking for orphaned servers on port \(portString)...")
+        let orphansKilled = killOrphans(onPort: config.port)
+        if orphansKilled > 0 {
+            NSLog("[\(config.name)] killed \(orphansKilled) orphan(s), waiting for port release...")
         }
 
-        // Resolve the start command. Substitute $PORT and similar.
-        let resolvedCommand = config.startCommand.map { resolvePath($0) }
+        // 4. WAIT PHASE — verify port is truly free before starting
+        let portFree = waitForPortFree(port: config.port, timeoutSeconds: 5)
+        if !portFree {
+            NSLog("[\(config.name)] WARNING: port \(portString) still occupied after 5s. Server may fail to bind.")
+            // Last resort: try one more aggressive kill
+            _ = killOrphans(onPort: config.port)
+            Thread.sleep(forTimeInterval: 1)
+        } else {
+            NSLog("[\(config.name)] port \(portString) is free")
+        }
 
-        // Find the executable. The first element is the program; rest are args.
+        // 5. Resolve start command
+        let resolvedCommand = config.startCommand.map { resolvePath($0) }
         guard let programRaw = resolvedCommand.first else {
             throw NSError(domain: "ServerManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "start_command is empty"])
         }
         let arguments = Array(resolvedCommand.dropFirst())
 
-        // Resolve the program to an absolute path. The start_command may use
-        // a relative path like "./runtime/python/bin/python3" — we resolve
-        // it relative to the .app's Resources/ directory.
         let program: String
         let resourcesPath = Bundle.main.resourcePath ?? NSTemporaryDirectory()
         if programRaw.hasPrefix("/") {
-            // Already absolute
             program = programRaw
         } else {
-            // Relative path: resolve against the .app's Resources/.
-            // Strip leading "./" because URL(fileURLWithPath:) handles it
-            // weirdly when used with relativeTo. We do the join manually.
-            let stripped = programRaw.hasPrefix("./")
-                ? String(programRaw.dropFirst(2))
-                : programRaw
+            let stripped = programRaw.hasPrefix("./") ? String(programRaw.dropFirst(2)) : programRaw
             let separator = resourcesPath.hasSuffix("/") ? "" : "/"
             program = resourcesPath + separator + stripped
         }
 
+        // 6. First-launch: run setup.py if no database
+        let dbPath = config.dataDir + "/app.db"
+        if !fm.fileExists(atPath: dbPath) {
+            runSetupIfNeeded(usingProgram: program)
+        }
+
+        // 7. Configure and launch server
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: program)
         proc.arguments = arguments
         proc.currentDirectoryURL = URL(fileURLWithPath: config.appDir)
 
-        // First-launch detection: run setup.py if the database doesn't exist.
-        // This is a safety net — the wrapper's FirstRunWindowController
-        // should have already run setup.py before we get here. But if the
-        // user deletes just the database (and not auth.json) or vice versa,
-        // we want to re-run setup so the app still works.
-        let dbPath = config.dataDir + "/app.db"
-        if !FileManager.default.fileExists(atPath: dbPath) {
-            let setupScript = config.appDir + "/setup.py"
-            if FileManager.default.fileExists(atPath: setupScript) {
-                NSLog("[\(config.name)] first launch detected, running setup.py (safety net)")
-                let setupProc = Process()
-                setupProc.executableURL = URL(fileURLWithPath: program)
-                setupProc.arguments = [setupScript]
-                setupProc.currentDirectoryURL = URL(fileURLWithPath: config.appDir)
-                var setupEnv = ProcessInfo.processInfo.environment
-                setupEnv["PYTHONPATH"] = (Bundle.main.resourcePath ?? "") + "/runtime/site-packages"
-                setupEnv["DATA_DIR"] = config.dataDir
-                setupEnv["LOGS_DIR"] = config.logsDir
-                setupEnv["CACHE_DIR"] = config.cacheDir
-                setupEnv["ODYSSEUS_SKIP_RUN_HINT"] = "1"
-                setupProc.environment = setupEnv
-                let setupOut = Pipe()
-                setupProc.standardOutput = setupOut
-                setupProc.standardError = setupOut
-                setupOut.fileHandleForReading.readabilityHandler = { handle in
-                    let data = handle.availableData
-                    if !data.isEmpty {
-                        if let str = String(data: data, encoding: .utf8) {
-                            FileHandle.standardError.write(str.data(using: .utf8) ?? Data())
-                        }
-                    }
-                }
-                do {
-                    try setupProc.run()
-                    setupProc.waitUntilExit()
-                } catch {
-                    NSLog("[\(config.name)] setup.py failed to launch: \(error)")
-                }
-            }
-        }
-
-        // Set up env. We set PYTHONPATH to include any bundled site-packages
-        // (the convention for per-apps using python-build-standalone; venv
-        // doesn't work reliably with relocatable Python on macOS).
-        // We also set DATABASE_URL explicitly to the right SQLite path so
-        // the webapp doesn't need any hardcoded-path patches for this.
         var env = ProcessInfo.processInfo.environment
-        env["PORT"] = String(config.port)
+        env["PORT"] = portString
         env["DATA_DIR"] = config.dataDir
         env["LOGS_DIR"] = config.logsDir
         env["CACHE_DIR"] = config.cacheDir
         env["APP_DIR"] = config.appDir
         env["BUNDLE_ID"] = config.bundleId
-        // SQLite URL: "sqlite:///" + absolute path. Three slashes = absolute path.
         env["DATABASE_URL"] = "sqlite:///" + config.dataDir + "/app.db"
-        // If the per-app bundles site-packages, expose them via PYTHONPATH.
         let sitePackages = (Bundle.main.resourcePath ?? "") + "/runtime/site-packages"
-        if FileManager.default.fileExists(atPath: sitePackages) {
+        if fm.fileExists(atPath: sitePackages) {
             env["PYTHONPATH"] = sitePackages
         }
-        for (k, v) in config.env {
-            env[k] = v
-        }
+        for (k, v) in config.env { env[k] = v }
         proc.environment = env
 
-        // Open the server log file in append mode
+        // Log file
         let logPath = config.logsDir + "/server.log"
         if !fm.fileExists(atPath: logPath) {
             fm.createFile(atPath: logPath, contents: nil, attributes: nil)
@@ -191,20 +124,20 @@ final class ServerManager {
         logHandle.seekToEndOfFile()
         logFileHandle = logHandle
 
-        // Pipe stdout+stderr to the log file (and a small in-memory buffer for the UI)
+        // Pipe stdout+stderr
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if data.isEmpty { return }
-            logHandle.write(data)
+            if !data.isEmpty { logHandle.write(data) }
         }
 
+        NSLog("[\(config.name)] starting server on port \(portString)...")
         try proc.run()
         process = proc
 
-        // Start polling for readiness
+        // 8. Start readiness polling
         startReadinessPolling()
     }
 
@@ -214,7 +147,6 @@ final class ServerManager {
         readinessTimer = nil
         guard let proc = process, proc.isRunning else { return }
         proc.terminate()
-        // Give it 3 seconds to exit cleanly, then SIGKILL
         let deadline = Date().addingTimeInterval(3)
         while proc.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.1)
@@ -227,6 +159,72 @@ final class ServerManager {
         logFileHandle = nil
     }
 
+    // MARK: - Orphan cleanup (NEW)
+
+    /// Find and SIGKILL every process holding the given port.
+    /// Returns the number of processes killed.
+    private func killOrphans(onPort port: Int) -> Int {
+        let portString = String(port)
+        guard let lsofData = Process.run(["/usr/sbin/lsof", "-ti", ":\(portString)"]),
+              let lsofOutput = String(data: lsofData, encoding: .utf8) else {
+            return 0
+        }
+
+        let pids = lsofOutput
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .compactMap { Int32($0) }
+            .filter { $0 > 0 }
+
+        guard !pids.isEmpty else { return 0 }
+
+        for pid in pids {
+            NSLog("[\(config.name)] SIGKILL orphan pid=\(pid) on port \(portString)")
+            kill(pid, SIGKILL)
+        }
+        return pids.count
+    }
+
+    /// Block until the port is connectable (or timeout).
+    /// Returns true if the port is free (connect fails), false if still occupied.
+    private func waitForPortFree(port: Int, timeoutSeconds: TimeInterval) -> Bool {
+        let portString = String(port)
+        let url = URL(string: "http://127.0.0.1:\(portString)/")!
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var attempt = 0
+
+        while Date() < deadline {
+            // Check 1: can we connect? If connection REFUSED, port is free.
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 0.3
+            let semaphore = DispatchSemaphore(value: 0)
+            var isRefused = false
+            URLSession.shared.dataTask(with: req) { _, _, error in
+                if let err = error as NSError? {
+                    // Connection refused = port is free!
+                    isRefused = (err.code == NSURLErrorCannotConnectToHost ||
+                                 err.code == NSURLErrorNetworkConnectionLost)
+                }
+                // If no error, something IS responding → port still occupied
+                semaphore.signal()
+            }.resume()
+            _ = semaphore.wait(timeout: .now() + .milliseconds(500))
+
+            if isRefused {
+                return true
+            }
+
+            attempt += 1
+            if attempt % 10 == 0 {
+                // Every ~500ms, try killing again (orphan may have respawned)
+                _ = killOrphans(onPort: port)
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        return false
+    }
+
     // MARK: - Readiness polling
 
     private func startReadinessPolling() {
@@ -236,45 +234,65 @@ final class ServerManager {
         let timeout = config.healthCheck?.timeoutSeconds ?? 60
 
         let startTime = Date()
+        var attemptCount = 0
         readinessTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
             guard let self = self else { timer.invalidate(); return }
+
             // Bail if process died
             if let p = self.process, !p.isRunning {
+                NSLog("[\(self.config.name)] server process died before becoming ready")
                 timer.invalidate()
                 return
             }
+
             // Timeout
-            if Date().timeIntervalSince(startTime) > Double(timeout) {
+            let elapsed = Date().timeIntervalSince(startTime)
+            if elapsed > Double(timeout) {
+                NSLog("[\(self.config.name)] server readiness timeout (\(Int(elapsed))s)")
                 timer.invalidate()
                 return
             }
+
+            attemptCount += 1
+            if attemptCount == 1 || attemptCount % 10 == 0 {
+                NSLog("[\(self.config.name)] polling server readiness... (\(Int(elapsed))s elapsed)")
+            }
+
             // Try the main URL
             var req = URLRequest(url: url)
             req.timeoutInterval = 1.5
-            URLSession.shared.dataTask(with: req) { _, response, _ in
-                if let http = response as? HTTPURLResponse, http.statusCode < 500 {
-                    // Optionally also check the health URL
-                    if let healthUrl = healthUrl {
-                        var hreq = URLRequest(url: healthUrl)
-                        hreq.timeoutInterval = 1.5
-                        URLSession.shared.dataTask(with: hreq) { _, hresponse, _ in
-                            if let hhttp = hresponse as? HTTPURLResponse, hhttp.statusCode == expected {
-                                DispatchQueue.main.async {
-                                    if !self.isReady {
-                                        self.isReady = true
-                                        timer.invalidate()
-                                        self.onReady?()
-                                    }
+            URLSession.shared.dataTask(with: req) { _, response, error in
+                if let err = error {
+                    if attemptCount % 10 == 0 {
+                        NSLog("[\(self.config.name)] readiness check error: \(err.localizedDescription)")
+                    }
+                    return
+                }
+                guard let http = response as? HTTPURLResponse, http.statusCode < 500 else { return }
+
+                // Optionally also check health URL
+                if let healthUrl = healthUrl {
+                    var hreq = URLRequest(url: healthUrl)
+                    hreq.timeoutInterval = 1.5
+                    URLSession.shared.dataTask(with: hreq) { _, hresponse, _ in
+                        if let hhttp = hresponse as? HTTPURLResponse, hhttp.statusCode == expected {
+                            DispatchQueue.main.async {
+                                if !self.isReady {
+                                    self.isReady = true
+                                    timer.invalidate()
+                                    NSLog("[\(self.config.name)] server ready after \(Int(elapsed))s")
+                                    self.onReady?()
                                 }
                             }
-                        }.resume()
-                    } else {
-                        DispatchQueue.main.async {
-                            if !self.isReady {
-                                self.isReady = true
-                                timer.invalidate()
-                                self.onReady?()
-                            }
+                        }
+                    }.resume()
+                } else {
+                    DispatchQueue.main.async {
+                        if !self.isReady {
+                            self.isReady = true
+                            timer.invalidate()
+                            NSLog("[\(self.config.name)] server ready after \(Int(elapsed))s")
+                            self.onReady?()
                         }
                     }
                 }
@@ -284,8 +302,33 @@ final class ServerManager {
 
     // MARK: - Helpers
 
-    /// Replace $PORT in a command-line argument with the actual port.
-    /// Also resolves $APP_DIR to the bundled source directory.
+    private func runSetupIfNeeded(usingProgram program: String) {
+        let setupScript = config.appDir + "/setup.py"
+        guard FileManager.default.fileExists(atPath: setupScript) else { return }
+
+        NSLog("[\(config.name)] first launch detected, running setup.py")
+        let setupProc = Process()
+        setupProc.executableURL = URL(fileURLWithPath: program)
+        setupProc.arguments = [setupScript]
+        setupProc.currentDirectoryURL = URL(fileURLWithPath: config.appDir)
+        var setupEnv = ProcessInfo.processInfo.environment
+        setupEnv["PYTHONPATH"] = (Bundle.main.resourcePath ?? "") + "/runtime/site-packages"
+        setupEnv["DATA_DIR"] = config.dataDir
+        setupEnv["LOGS_DIR"] = config.logsDir
+        setupEnv["CACHE_DIR"] = config.cacheDir
+        setupEnv["ODYSSEUS_SKIP_RUN_HINT"] = "1"
+        setupProc.environment = setupEnv
+        let setupOut = Pipe()
+        setupProc.standardOutput = setupOut
+        setupProc.standardError = setupOut
+        do {
+            try setupProc.run()
+            setupProc.waitUntilExit()
+        } catch {
+            NSLog("[\(config.name)] setup.py failed: \(error)")
+        }
+    }
+
     private func resolvePath(_ s: String) -> String {
         var result = s
         result = result.replacingOccurrences(of: "$PORT", with: String(config.port))

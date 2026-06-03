@@ -83,8 +83,11 @@ jobs:
           fail_on_unmatched_files: false
 
       - name: Commit updated appcast back to main
-        # Only do this for tags that match main. Don't push tags
-        # to main if the tag was made from a feature branch.
+        # CRITICAL: this step signs the CI-built .dmg and generates the
+        # appcast.xml with the CORRECT signature for that exact .dmg file.
+        # NEVER modify appcasts/<app>.xml manually on a local machine —
+        # the CI-built .dmg and locally-built .dmg have different file
+        # sizes, so their signatures will never match.
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
@@ -93,6 +96,8 @@ jobs:
             echo "No appcast changes to commit"
           else
             git commit -m "Release ${{ matrix.app }} ${{ steps.version.outputs.VERSION }}: update appcast"
-            # Push to main (tag push refs are immutable, so we target the branch)
+            # Pull latest main and rebase to avoid rejection
+            git fetch origin main
+            git rebase origin/main || git rebase --abort
             git push origin HEAD:main
           fi
