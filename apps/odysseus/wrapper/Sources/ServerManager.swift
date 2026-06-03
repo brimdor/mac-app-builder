@@ -33,6 +33,27 @@ final class ServerManager {
         try? fm.createDirectory(atPath: config.logsDir, withIntermediateDirectories: true)
         try? fm.createDirectory(atPath: config.cacheDir, withIntermediateDirectories: true)
 
+        // Kill any orphaned process still holding our port. After a Sparkle
+        // update the old Python server survives as an orphan (macOS doesn't
+        // auto-kill child processes when the parent exits). If we don't clean
+        // it up, the new server fails to bind the port and the UI stays black.
+        let portString = String(config.port)
+        if let lsof = Process.run(["/usr/sbin/lsof", "-ti", ":\(portString)"]),
+           let pidStr = String(data: lsof, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let pid = Int32(pidStr), pid > 0 {
+            NSLog("[\(config.name)] killing orphaned server (pid=\(pid)) still holding port \(portString)")
+            kill(pid, SIGKILL)
+            // Wait briefly for the socket to be released
+            var retries = 0
+            while retries < 50 {
+                if Process.run(["/usr/sbin/lsof", "-ti", ":\(portString)"]) == nil {
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.05)
+                retries += 1
+            }
+        }
+
         // Resolve the start command. Substitute $PORT and similar.
         let resolvedCommand = config.startCommand.map { resolvePath($0) }
 
@@ -240,5 +261,27 @@ final class ServerManager {
         result = result.replacingOccurrences(of: "$PORT", with: String(config.port))
         result = result.replacingOccurrences(of: "$APP_DIR", with: config.appDir)
         return result
+    }
+}
+
+// MARK: - Process helper for port-cleanup
+private extension Process {
+    /// Run a command synchronously, return stdout as Data, or nil on failure.
+    static func run(_ arguments: [String]) -> Data? {
+        guard let executable = arguments.first, !executable.isEmpty else { return nil }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: executable)
+        proc.arguments = Array(arguments.dropFirst())
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            return proc.terminationStatus == 0 && !data.isEmpty ? data : nil
+        } catch {
+            return nil
+        }
     }
 }
