@@ -84,8 +84,16 @@ echo "  next version:    $NEXT_VERSION (build $NEXT_BUILD)"
 # ── 4. Update webappify.yaml ─────────────────────────────────────────────
 echo ""
 echo "▶ Updating webappify.yaml"
-sed -i '' "s/^version: .*/version: $NEXT_VERSION/" "$WEBAPIFY"
-sed -i '' "s/^build_number: .*/build_number: $NEXT_BUILD/" "$WEBAPIFY"
+# Cross-platform sed: macOS needs -i '' (backup suffix), Linux needs -i (no suffix)
+if sed --version 2>/dev/null | grep -q "GNU"; then
+    # Linux/GNU sed
+    sed -i "s/^version: .*/version: $NEXT_VERSION/" "$WEBAPIFY"
+    sed -i "s/^build_number: .*/build_number: $NEXT_BUILD/" "$WEBAPIFY"
+else
+    # macOS/BSD sed
+    sed -i '' "s/^version: .*/version: $NEXT_VERSION/" "$WEBAPIFY"
+    sed -i '' "s/^build_number: .*/build_number: $NEXT_BUILD/" "$WEBAPIFY"
+fi
 echo "  version: $CURRENT_VERSION → $NEXT_VERSION"
 echo "  build:   $CURRENT_BUILD → $NEXT_BUILD"
 
