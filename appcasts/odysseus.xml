@@ -6,7 +6,31 @@
     <description>Updates for Odysseus, built with mac-app-builder.</description>
     <language>en</language>
 
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+  
     <item>
+      <title>Odysseus 0.3.9</title>
+      <pubDate>Wed, 03 Jun 2026 17:28:16 +0000</pubDate>
+      <sparkle:version>11</sparkle:version>
+      <sparkle:shortVersionString>0.3.9</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/brimdor/mac-app-builder/releases/download/v0.3.9/Odysseus-0.3.9.dmg"
+                 sparkle:edSignature="OI+DINmBjIn1FB2UdwEL8gzRjMHYAJV+G2JyqTFOU/LJp5WUypyWFgX8QHIdn/MAzxoylstG/z5ccXkTHLyaAA=="
+                 length="291332330"
+                 type="application/x-apple-diskimage" />
+    </item>
+<item>
       <title>Odysseus 0.3.8</title>
       <pubDate>Wed, 03 Jun 2026 17:20:00 +0000</pubDate>
       <sparkle:version>10</sparkle:version>
@@ -17,8 +41,7 @@
                  length="292473244"
                  type="application/x-apple-diskimage" />
     </item>
-
-    <item>
+<item>
       <title>Odysseus 0.3.7</title>
       <pubDate>Wed, 03 Jun 2026 17:00:00 +0000</pubDate>
       <sparkle:version>9</sparkle:version>
@@ -29,8 +52,7 @@
                  length="289381066"
                  type="application/x-apple-diskimage" />
     </item>
-
-    <item>
+<item>
       <title>Odysseus 0.3.6</title>
       <pubDate>Wed, 03 Jun 2026 16:15:00 +0000</pubDate>
       <sparkle:version>8</sparkle:version>
@@ -41,8 +63,7 @@
                  length="290331400"
                  type="application/x-apple-diskimage" />
     </item>
-
-    <item>
+<item>
       <title>Odysseus 0.3.5</title>
       <pubDate>Wed, 03 Jun 2026 15:00:00 +0000</pubDate>
       <sparkle:version>7</sparkle:version>
@@ -53,8 +74,7 @@
                  length="291322383"
                  type="application/x-apple-diskimage" />
     </item>
-
-    <item>
+<item>
       <title>Odysseus 0.3.3</title>
       <pubDate>Wed, 03 Jun 2026 13:58:51 +0000</pubDate>
       <sparkle:version>5</sparkle:version>
@@ -65,8 +85,7 @@
                  length="294795720"
                  type="application/x-apple-diskimage" />
     </item>
-
-    <item>
+<item>
       <title>Odysseus 0.3.0</title>
       <pubDate>Wed, 03 Jun 2026 01:51:24 +0000</pubDate>
       <sparkle:version>2</sparkle:version>
@@ -77,6 +96,5 @@
                  length="278205455"
                  type="application/x-apple-diskimage" />
     </item>
-
   </channel>
 </rss>
