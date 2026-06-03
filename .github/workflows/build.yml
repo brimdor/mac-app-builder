@@ -43,7 +43,7 @@ jobs:
 
       - name: Validate webappify.yaml
         run: |
-          PYBIN="${{ steps.python.outputs.python-path }}/bin/python"
+          PYBIN="${{ steps.python.outputs.python-path }}"
           for f in apps/*/webappify.yaml; do
             [ -f "$f" ] || continue
             echo "Validating $f"
