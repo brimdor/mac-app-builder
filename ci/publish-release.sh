@@ -93,13 +93,25 @@ echo "  signature:  $SIGNATURE"
 DMG_LENGTH=$(stat -f%z "$DMG_PATH")
 echo "  length:     $DMG_LENGTH bytes"
 
-# 3. Render the new <item>
+# 3. Compute sparkle:version (integer build number) from webappify.yaml
+# Sparkle compares the running app's CFBundleVersion against this value.
+WEBAPIFY="$REPO_ROOT/apps/$APP_NAME/webappify.yaml"
+if [ -f "$WEBAPIFY" ]; then
+    SPARKLE_VERSION=$(grep '^build_number:' "$WEBAPIFY" | head -1 | sed 's/^build_number:[[:space:]]*//')
+fi
+if [ -z "${SPARKLE_VERSION:-}" ]; then
+    # Fallback: convert semver x.y.z to integer for Sparkle comparison.
+    # e.g. 0.3.0 → 300, 1.2.3 → 10203. Explicit build_number is preferred.
+    SPARKLE_VERSION=$(echo "$VERSION" | awk -F. '{printf "%d%02d%02d\n", $1, $2, $3}')
+fi
+
+# 4. Render the new <item>
 PUB_DATE=$(date -u "+%a, %d %b %Y %H:%M:%S +0000")
 NEW_ITEM=$(cat <<EOF
     <item>
       <title>$APP_DISPLAY_NAME $VERSION</title>
       <pubDate>$PUB_DATE</pubDate>
-      <sparkle:version>1</sparkle:version>
+      <sparkle:version>$SPARKLE_VERSION</sparkle:version>
       <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
       <enclosure url="$DMG_URL"

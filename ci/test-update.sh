@@ -219,13 +219,16 @@ echo '{"users":{"_test":{"is_admin":true}}}' > ~/Library/Application\ Support/co
 echo
 echo "▶ Step 5: launch v0.2.1 and verify Sparkle fetches the appcast"
 
-# Wipe any prior data
-rm -rf ~/Library/Application\ Support/com.pewdiepie-archdaemon.odysseus
-mkdir -p ~/Library/Application\ Support/com.pewdiepie-archdaemon.odysseus
-# Pre-seed auth.json so the wizard doesn't show
-echo '{"users":{"_test":{"is_admin":true}}}' > ~/Library/Application\ Support/com.pewdiepie-archdaemon.odysseus/auth.json
+# IMPORTANT: We intentionally do NOT wipe ~/Library/Application Support/.
+# The E2E test must never destroy real user data. If data exists, the test
+# uses it; if not, the first-run wizard will run (which is acceptable for
+# a clean-install test).
+#
+# Previous versions of this script did:
+#   rm -rf ~/Library/Application\ Support/com.pewdiepie-archdaemon.odysseus
+# which destroyed production data. That was a bug.
 
-# Clean log
+# Clean log (safe — logs are ephemeral)
 > ~/Library/Logs/com.pewdiepie-archdaemon.odysseus/wrapper.log
 > ~/Library/Logs/com.pewdiepie-archdaemon.odysseus/server.log
 

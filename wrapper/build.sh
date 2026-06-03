@@ -48,10 +48,31 @@ echo "  wrapper: $WRAPPER_DIR"
 echo "  output:  $OUTPUT_PATH"
 
 # ── 1. Resolve the Sparkle dependency & compile the wrapper via SPM ───────
+# If SOURCES_DIR is set (per-app customization), temporarily swap the
+# wrapper sources so SPM builds the per-app customized version.
+SOURCES_DIR="${SOURCES_DIR:-$WRAPPER_DIR/Sources}"
+if [ "$SOURCES_DIR" != "$WRAPPER_DIR/Sources" ]; then
+    echo "  using per-app sources: $SOURCES_DIR"
+    # Back up reference sources, copy per-app sources in
+    REF_BACKUP="$(mktemp -d)"
+    cp -R "$WRAPPER_DIR/Sources/" "$REF_BACKUP/"
+    rm -rf "$WRAPPER_DIR/Sources"
+    cp -R "$SOURCES_DIR/" "$WRAPPER_DIR/Sources/"
+    # Restore on exit
+    restore_sources() {
+        rm -rf "$WRAPPER_DIR/Sources"
+        cp -R "$REF_BACKUP/" "$WRAPPER_DIR/Sources/"
+        rm -rf "$REF_BACKUP"
+    }
+    trap restore_sources EXIT
+fi
+
 echo
-echo "▶ Running swift build"
 cd "$WRAPPER_DIR"
 "$SWIFT_BUILD" build -c "$BUILD_CONFIG" 2>&1 | tail -5
+
+# Move back to original dir so OUTPUT_PATH is correct relative to caller
+cd - > /dev/null
 
 # Find the resulting binary. SPM puts it in
 # .build/<arch>-apple-macosx/<config>/wrapper

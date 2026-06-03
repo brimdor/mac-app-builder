@@ -141,6 +141,7 @@ else
     BUNDLE_ID=$(grep '^bundle_id:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^bundle_id:[[:space:]]*//')
     DISPLAY_NAME=$(grep '^display_name:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^display_name:[[:space:]]*//')
     VERSION=$(grep '^version:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^version:[[:space:]]*//')
+    BUILD_NUMBER=$(grep '^build_number:' "$PER_APP_DIR/webappify.yaml" | head -1 | sed 's/^build_number:[[:space:]]*//')
     if [ -n "$BUNDLE_ID" ]; then
         /usr/bin/plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$APP_OUTPUT/Contents/Info.plist"
     fi
@@ -148,8 +149,20 @@ else
         /usr/bin/plutil -replace CFBundleDisplayName -string "$DISPLAY_NAME" "$APP_OUTPUT/Contents/Info.plist"
     fi
     if [ -n "$VERSION" ]; then
-        /usr/bin/plutil -replace CFBundleVersion -string "$VERSION" "$APP_OUTPUT/Contents/Info.plist"
         /usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP_OUTPUT/Contents/Info.plist"
+    fi
+    # Sparkle compares CFBundleVersion (integer build number) against
+    # <sparkle:version> in the appcast. Use build_number if provided,
+    # otherwise fall back to a monotonically increasing integer derived
+    # from the version string.
+    if [ -n "$BUILD_NUMBER" ]; then
+        /usr/bin/plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP_OUTPUT/Contents/Info.plist"
+    elif [ -n "$VERSION" ]; then
+        # Fallback: convert semver x.y.z to integer for Sparkle comparison.
+        # e.g. 0.3.0 → 300, 1.2.3 → 10203. This is a heuristic; explicit
+        # build_number is preferred.
+        BUILD_FALLBACK=$(echo "$VERSION" | awk -F. '{printf "%d%02d%02d\n", $1, $2, $3}')
+        /usr/bin/plutil -replace CFBundleVersion -string "$BUILD_FALLBACK" "$APP_OUTPUT/Contents/Info.plist"
     fi
 fi
 
