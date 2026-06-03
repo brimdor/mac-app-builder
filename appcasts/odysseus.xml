@@ -18,7 +18,24 @@
 
 
   
-        <item>
+        
+
+
+
+
+  
+    <item>
+      <title>Odysseus 0.3.8</title>
+      <pubDate>Wed, 03 Jun 2026 17:01:46 +0000</pubDate>
+      <sparkle:version>10</sparkle:version>
+      <sparkle:shortVersionString>0.3.8</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/brimdor/mac-app-builder/releases/download/v0.3.8/Odysseus-0.3.8.dmg"
+                 sparkle:edSignature="bW4wAvfiqB4Od9SSIJHrkh7sq2SfxdGiu1MUQipzBi4zGqdJF4snD0/nXEc2/OJgPfJpLCXAVAa9s4jDkY2PDw=="
+                 length="291186759"
+                 type="application/x-apple-diskimage" />
+    </item>
+<item>
       <title>Odysseus 0.3.7</title>
       <pubDate>Wed, 03 Jun 2026 17:00:00 +0000</pubDate>
       <sparkle:version>9</sparkle:version>
