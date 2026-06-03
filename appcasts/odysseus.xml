@@ -2,32 +2,18 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <title>Odysseus</title>
-    <link>http://127.0.0.1:9999/dist/Odysseus-0.3.0.dmg</link>
+    <link>https://raw.githubusercontent.com/brimdor/mac-app-builder/main/appcasts/odysseus.xml</link>
     <description>Updates for Odysseus, built with mac-app-builder.</description>
     <language>en</language>
-    
-    
-  
     <item>
       <title>Odysseus 0.3.0</title>
-      <pubDate>Wed, 03 Jun 2026 01:50:05 +0000</pubDate>
+      <pubDate>Wed, 03 Jun 2026 01:51:24 +0000</pubDate>
       <sparkle:version>2</sparkle:version>
       <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
       <enclosure url="https://github.com/brimdor/mac-app-builder/releases/download/v0.3.0/Odysseus-0.3.0.dmg"
                  sparkle:edSignature="HN+rVZmmXsFMSNtg3yjBM6VtxORnN0xUQEGeI8CmrGknXzX5Bxw38+v/nsNzhW4U4Y02PILVKmYqabaNEoR0Cg=="
                  length="278205455"
-                 type="application/x-apple-diskimage" />
-    </item>
-<item>
-      <title>Odysseus 0.3.0</title>
-      <pubDate>Wed, 03 Jun 2026 01:07:02 +0000</pubDate>
-      <sparkle:version>2</sparkle:version>
-      <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
-      <enclosure url="http://127.0.0.1:9999/dist/Odysseus-0.3.0.dmg"
-                 sparkle:edSignature="4DXBI3RbulAAYMGLc25vSoDbn2Xh4NPHq4LCt8GOPY5532hUovtFP5yIIggmoCAdU5zZK9sxH4qMvQguUJf3Aw=="
-                 length="292600818"
                  type="application/x-apple-diskimage" />
     </item>
   </channel>
