@@ -63,10 +63,7 @@ env:
 # `SUFeedURL` in Info.plist at build time. Sparkle fetches this URL on
 # launch (and on a 24h interval) to check for new releases.
 #
-# For dev/testing, point at a local HTTP server. The ci/test-update.sh
-# script runs one on port 9999.
-# update_feed: http://127.0.0.1:9999/appcast.xml
-#
-# For production, point at the public appcast (hosted via GitHub Pages,
-# S3, or any HTTPS endpoint reachable by end users):
-update_feed: http://127.0.0.1:9999/appcast.xml
+# Production: uses the appcast served from the repo's main branch via
+# GitHub raw content. The appcast is updated by ci/publish-release.sh
+# when a new release is published.
+update_feed: https://raw.githubusercontent.com/brimdor/mac-app-builder/main/appcasts/odysseus.xml
