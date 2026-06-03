@@ -33,6 +33,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Python dependencies
+        run: |
+          ${{ steps.python.outputs.python-path }} -m pip install pyyaml cryptography
+
       - name: Run shellcheck on all scripts
         run: |
           if command -v shellcheck >/dev/null 2>&1; then
