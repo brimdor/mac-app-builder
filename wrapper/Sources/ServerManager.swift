@@ -33,6 +33,24 @@ final class ServerManager {
         try? fm.createDirectory(atPath: config.logsDir, withIntermediateDirectories: true)
         try? fm.createDirectory(atPath: config.cacheDir, withIntermediateDirectories: true)
 
+        // Migrate .app_key from old bundle location to DATA_DIR.
+        // In versions <= 0.3.4 the encryption key lived inside the .app bundle
+        // at Contents/Resources/app/data/.app_key. Sparkle updates wipe the
+        // bundle, which destroyed the key and broke API-key decryption.
+        // v0.3.5+ stores the key in DATA_DIR/.app_key (outside the bundle).
+        // On first launch after update, copy the old key to the new location
+        // so existing encrypted secrets remain readable.
+        let oldKeyPath = (Bundle.main.resourcePath ?? "") + "/app/data/.app_key"
+        let newKeyPath = config.dataDir + "/.app_key"
+        if fm.fileExists(atPath: oldKeyPath) && !fm.fileExists(atPath: newKeyPath) {
+            do {
+                try fm.copyItem(atPath: oldKeyPath, toPath: newKeyPath)
+                NSLog("[\(config.name)] migrated .app_key from bundle to DATA_DIR")
+            } catch {
+                NSLog("[\(config.name)] failed to migrate .app_key: \(error.localizedDescription)")
+            }
+        }
+
         // Kill any orphaned process still holding our port. After a Sparkle
         // update the old Python server survives as an orphan (macOS doesn't
         // auto-kill child processes when the parent exits). If we don't clean

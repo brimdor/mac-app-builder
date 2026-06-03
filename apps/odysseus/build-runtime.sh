@@ -241,7 +241,24 @@ if [ -f "$DATABASE_FILE" ] && grep -q 'sqlite:///./data/app.db' "$DATABASE_FILE"
     echo "  patched: core/database.py (DATABASE_URL)"
 fi
 
-# 6. Verify: scan for any remaining hardcoded 'BASE_DIR, "data"' usages
+# 6. src/secret_storage.py: move encryption key to $DATA_DIR
+# The upstream hardcodes `data/.app_key` relative to the source tree.
+# That puts the key INSIDE the .app bundle — it gets wiped on every
+# Sparkle update. We patch it to use $DATA_DIR/.app_key so the key
+# survives updates (Cardinal Rule: secrets live outside the .app).
+SECRET_FILE="$APP_DIR/Resources/app/src/secret_storage.py"
+SECRET_SRC="$RESTORE_FROM/src/secret_storage.py"
+if [ -f "$SECRET_SRC" ] && [ -f "$SECRET_FILE" ]; then
+    cp "$SECRET_SRC" "$SECRET_FILE"
+fi
+if [ -f "$SECRET_FILE" ] && grep -q '_KEY_PATH = Path(__file__).resolve().parent.parent / "data" / ".app_key"' "$SECRET_FILE"; then
+    sed -i.bak 's|_KEY_PATH = Path(__file__).resolve().parent.parent / "data" / ".app_key"|_KEY_PATH = Path(os.environ.get("DATA_DIR", str(Path(__file__).resolve().parent.parent / "data"))) / ".app_key"|' "$SECRET_FILE"
+    rm -f "$SECRET_FILE.bak"
+    echo "  patched: src/secret_storage.py (_KEY_PATH -> \$DATA_DIR/.app_key)"
+fi
+
+# 7. Verify: scan for any remaining hardcoded 'BASE_DIR, "data"' usages
+# and also verify the secret_storage patch is in place
 echo "▶ Verifying no hardcoded data paths remain in patched files"
 REMAINING=$(grep -rn 'os.path.join(BASE_DIR, "data"' "$APP_DIR/Resources/app/core/" "$APP_DIR/Resources/app/src/" "$APP_DIR/Resources/app/setup.py" "$APP_DIR/Resources/app/routes/" 2>/dev/null | wc -l | tr -d ' ')
 if [ "$REMAINING" -gt 0 ]; then
@@ -251,33 +268,11 @@ else
     echo "  ✓ all hardcoded data paths patched"
 fi
 
-# 2. setup.py: same DATA_DIR fix + LOGS_DIR fix
-SETUP_FILE="$APP_DIR/Resources/app/setup.py"
-if [ -f "$SETUP_FILE" ]; then
-    # DATA_DIR
-    if grep -q '^DATA_DIR = os.path.join(BASE_DIR, "data")' "$SETUP_FILE"; then
-        sed -i.bak 's|^DATA_DIR = os.path.join(BASE_DIR, "data")|DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))|' "$SETUP_FILE"
-        echo "  patched: setup.py (DATA_DIR)"
-    fi
-    # LOGS_DIR — replace the hardcoded `os.path.join(BASE_DIR, "logs")` in the DIRS list
-    # The pattern is: in the DIRS list, "logs" comes from BASE_DIR. Replace with env var.
-    if grep -q 'os.path.join(BASE_DIR, "logs")' "$SETUP_FILE"; then
-        sed -i.bak 's|os.path.join(BASE_DIR, "logs")|os.environ.get("LOGS_DIR", os.path.join(BASE_DIR, "logs"))|' "$SETUP_FILE"
-        echo "  patched: setup.py (LOGS_DIR)"
-    fi
-    # .env files — the example is fine in the app dir, but the user's .env should go to DATA_DIR
-    # We leave the .env example in the app dir (it's part of the webapp source), but
-    # the user's .env (which the wizard will read on subsequent launches) should be
-    # in DATA_DIR. The wizard writes it directly there.
-    rm -f "$SETUP_FILE.bak"
-fi
-
-# 3. Verify: grep for any remaining hardcoded data paths in core/ and setup.py
-echo "▶ Verifying no hardcoded data paths remain"
-HARDCODED=$(grep -rn 'os.path.join(BASE_DIR, "data")' "$APP_DIR/Resources/app/core/" "$APP_DIR/Resources/app/setup.py" 2>/dev/null | wc -l | tr -d ' ')
-if [ "$HARDCODED" -gt 0 ]; then
-    echo "  WARNING: $HARDCODED hardcoded data paths still present:"
-    grep -rn 'os.path.join(BASE_DIR, "data")' "$APP_DIR/Resources/app/core/" "$APP_DIR/Resources/app/setup.py" 2>/dev/null | sed 's/^/    /'
+# Verify secret_storage patch
+if grep -q 'os.environ.get("DATA_DIR"' "$APP_DIR/Resources/app/src/secret_storage.py" 2>/dev/null; then
+    echo "  ✓ secret_storage key path patched to use \$DATA_DIR"
+else
+    echo "  WARNING: secret_storage.py may not be patched — key could end up inside .app"
 fi
 
 # ── 8. Verify the install works ────────────────────────────────────────────
