@@ -17,7 +17,7 @@
 import Cocoa
 import WebKit
 
-class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
 
     // ── Configuration (loaded at startup) ──
     var config: WebAppConfig!
@@ -110,6 +110,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         webView = WKWebView(frame: window.contentView!.bounds, configuration: cfg)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         window.contentView?.addSubview(webView)
 
@@ -325,17 +326,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        // Open external links in the default browser
+        // Open external links in the default browser. We handle ANY request
+        // that is not from our local server (not just user-clicks on <a> tags).
+        // This catches:
+        //   - normal link clicks (linkActivated)
+        //   - button clicks that navigate via JavaScript (other)
+        //   - form submissions (formSubmitted / formResubmitted)
         if let urlStr = navigationAction.request.url?.absoluteString,
            !urlStr.hasPrefix("http://127.0.0.1:\(config.port)"),
            !urlStr.hasPrefix("about:"),
-           navigationAction.navigationType == .linkActivated,
            let url = navigationAction.request.url {
+            NSLog("[\(config.name)] opening external URL in default browser: \(urlStr)")
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
             return
         }
         decisionHandler(.allow)
+    }
+
+    // MARK: - WKUIDelegate (handles window.open / target="_blank")
+
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        // JavaScript window.open() or target="_blank" — open in default browser
+        if let url = navigationAction.request.url {
+            let urlStr = url.absoluteString
+            NSLog("[\(config.name)] JS window.open() → opening in browser: \(urlStr)")
+            NSWorkspace.shared.open(url)
+        }
+        return nil  // don't create a popup WebView
     }
 
     // MARK: - Helpers
