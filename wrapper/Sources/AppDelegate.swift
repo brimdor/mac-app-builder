@@ -17,7 +17,7 @@
 import Cocoa
 import WebKit
 
-class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
 
     // ── Configuration (loaded at startup) ──
     var config: WebAppConfig!
@@ -110,6 +110,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         webView = WKWebView(frame: window.contentView!.bounds, configuration: cfg)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         window.contentView?.addSubview(webView)
 

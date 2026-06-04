@@ -6,8 +6,9 @@ on:
     tags:
       - 'v*'
 
-# Allow manual trigger for testing
-  workflow_dispatch:
+# DO NOT add workflow_dispatch — it creates a race condition where two
+# builds overwrite the same release assets with different signatures.
+# Removed in v0.3.9: only tag push triggers a build.
 
 # Cancel in-progress runs for the same tag
 concurrency:
