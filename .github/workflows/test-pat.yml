@@ -1,0 +1,21 @@
+name: Test PAT
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PAT identity
+        env:
+          PAT: ${{ secrets.PAT_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$PAT" ]; then
+            echo "::error::PAT_GITHUB_TOKEN is empty or not set"
+            exit 1
+          fi
+          echo "PAT length: ${#PAT}"
+          echo "PAT prefix: ${PAT:0:7}"
+          echo "Calling /user endpoint with PAT..."
+          curl -s -H "Authorization: Bearer $PAT" https://api.github.com/user | head -5
+          echo ""
+          echo "Calling /repos/brimdor/mac-app-builder with PAT..."
+          curl -s -H "Authorization: Bearer $PAT" https://api.github.com/repos/brimdor/mac-app-builder | head -3
