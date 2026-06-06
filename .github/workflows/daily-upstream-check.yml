@@ -46,7 +46,16 @@ jobs:
 
       - name: Check upstream for new commits
         id: check
-        run: ./ci/check-upstream.sh "${{ matrix.app }}"
+        run: |
+          ./ci/check-upstream.sh "${{ matrix.app }}"
+          if git describe --tags --exact-match HEAD 2>/dev/null; then
+            TAG=$(git describe --tags --exact-match HEAD)
+            echo "NEW_TAG=$TAG" >> "$GITHUB_OUTPUT"
+            echo "NEW_VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "Created tag: $TAG"
+          else
+            echo "No new tag created"
+          fi
 
       - name: Push version bump + tag
         if: steps.check.outputs.NEW_TAG != ''
