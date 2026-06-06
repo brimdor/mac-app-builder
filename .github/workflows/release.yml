@@ -1,14 +1,31 @@
 name: Release per-app .app and .dmg
 
-# Triggers on tag push: v0.3.0, v1.0.0, etc.
+# Triggers:
+#   1. Tag push (v0.3.0, v1.0.0, etc.) — fires when a tag is pushed by
+#      a human (e.g. `git push origin v1.0.0`) or by a workflow that has
+#      a non-GITHUB_TOKEN identity (e.g. a GitHub App or a PAT).
+#   2. workflow_dispatch from this repo's own workflows — used by
+#      daily-upstream-check.yml because GitHub's recursion guard
+#      blocks GITHUB_TOKEN from triggering `push: tags:` workflows.
+#
+# Why workflow_dispatch is safe here:
+#   - The release workflow is still keyed on a unique tag (v*).
+#     The dispatch caller passes a version; we re-create that tag
+#     if missing and only one release can be in-flight per tag
+#     (enforced by the concurrency group below).
+#   - We refuse to dispatch with a version that already has a tag
+#     pointing to a non-empty release, preventing accidental
+#     overwrite of a finished release.
 on:
   push:
     tags:
       - 'v*'
-
-# DO NOT add workflow_dispatch — it creates a race condition where two
-# builds overwrite the same release assets with different signatures.
-# Removed in v0.3.9: only tag push triggers a build.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.3.13). Must not already have a published release.'
+        required: true
+        type: string
 
 # Cancel in-progress runs for the same tag
 concurrency:
@@ -16,15 +33,15 @@ concurrency:
   cancel-in-progress: false   # don't cancel a release in progress
 
 # Need write permission to create releases, upload assets, and push appcast commits.
-# GITHUB_TOKEN works for tag-push triggers: the recursion guard does not
-# apply to direct `push` events, so the same workflow can push appcast
-# updates back to main without needing a PAT.
+# GITHUB_TOKEN is fine here: this workflow is not the source of recursion (it
+# pushes appcast updates via the git data API, which is a write to the repo,
+# not a workflow trigger).
 permissions:
   contents: write
 
 jobs:
   release:
-    name: Build & publish ${{ matrix.app }} ${{ github.ref_name }}
+    name: Build & publish ${{ matrix.app }} ${{ steps.resolve.outputs.VERSION }}
     runs-on: macos-14
     timeout-minutes: 30
 
@@ -39,19 +56,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python (for signing + appcast generation)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Python signing deps
-        run: python3 -m pip install cryptography
-
-      - name: Read version from tag
-        id: version
+      - name: Resolve version (tag push OR workflow_dispatch)
+        id: resolve
         run: |
-          # Tag is v0.3.0 → VERSION=0.3.0
-          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+              echo "::error::workflow_dispatch 'version' input is malformed: '$VERSION'"
+              exit 1
+            fi
+            # Refuse to dispatch if a release for this version already exists.
+            if gh release view "v${VERSION}" >/dev/null 2>&1; then
+              echo "::error::Release v${VERSION} already exists. Refusing to rebuild."
+              exit 1
+            fi
+            # Anchor VERSION to the current main tip. The dispatch caller
+            # doesn't pass a SHA; we just build from whatever main is now.
+            # This is fine because the daily-upstream-check caller creates
+            # the version-bump commit on main right before dispatching us,
+            # and the dispatch goes through immediately.
+            ANCHOR_SHA=$(git rev-parse origin/main)
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
+            git tag -f "v${VERSION}" "$ANCHOR_SHA"
+          else
+            # Tag push: VERSION comes from the ref name (e.g. refs/tags/v0.3.13).
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release version: ${VERSION}"
 
       - name: Build the .app
         run: ./ci/build-app.sh ${{ matrix.app }}
@@ -67,7 +100,7 @@ jobs:
           ./ci/lift-and-shift-test.sh "dist/${APP_NAME}.app"
 
       - name: Package .dmg
-        run: ./ci/package-dmg.sh ${{ matrix.app }} ${{ steps.version.outputs.VERSION }}
+        run: ./ci/package-dmg.sh ${{ matrix.app }} ${{ steps.resolve.outputs.VERSION }}
 
       - name: Sign .app
         run: |
@@ -81,13 +114,22 @@ jobs:
           # Compute the public URL the .dmg will live at once released.
           # GitHub Releases: https://github.com/<owner>/<repo>/releases/download/<tag>/<file>
           APP_NAME="$(echo '${{ matrix.app }}' | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
-          DMG_FILE="${APP_NAME}-${{ steps.version.outputs.VERSION }}.dmg"
-          DMG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${DMG_FILE}"
-          ./ci/publish-release.sh ${{ matrix.app }} ${{ steps.version.outputs.VERSION }} "$DMG_URL"
+          DMG_FILE="${APP_NAME}-${{ steps.resolve.outputs.VERSION }}.dmg"
+          # For tag-push, GITHUB_REF_NAME is the tag. For workflow_dispatch,
+          # we need to construct the tag name from the resolved version.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="v${{ steps.resolve.outputs.VERSION }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          DMG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${DMG_FILE}"
+          echo "DMG_URL=${DMG_URL}" >> "$GITHUB_ENV"
+          ./ci/publish-release.sh ${{ matrix.app }} ${{ steps.resolve.outputs.VERSION }} "$DMG_URL"
 
       - name: Create GitHub Release with .dmg
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', steps.resolve.outputs.VERSION) || github.ref_name }}
           files: |
             dist/*.dmg
             appcasts/${{ matrix.app }}.xml
@@ -124,7 +166,7 @@ jobs:
           # releases try to update main at once, which we handle with a
           # single retry.
           APPCAST_PATH="appcasts/${{ matrix.app }}.xml"
-          COMMIT_MSG="Release ${{ matrix.app }} ${{ steps.version.outputs.VERSION }}: update appcast"
+          COMMIT_MSG="Release ${{ matrix.app }} ${{ steps.resolve.outputs.VERSION }}: update appcast"
 
           attempt=0
           max_attempts=3

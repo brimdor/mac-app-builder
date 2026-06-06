@@ -9,12 +9,11 @@ concurrency:
   group: upstream-check-${{ github.ref }}
   cancel-in-progress: false
 
-# GITHUB_TOKEN is sufficient here. Tag push from GITHUB_TOKEN DOES trigger
-# workflows keyed on `push: tags:` (release.yml). The recursion guard only
-# blocks `workflow_run` and `pull_request` from being re-triggered by a
-# workflow run. Branch/tag push events always fire downstream workflows.
-# We previously required PAT_GITHUB_TOKEN because of a misread of the rule
-# — the real failure mode was the secret getting corrupted, not the token.
+# GITHUB_TOKEN is sufficient. We dispatch release.yml via the workflow
+# dispatch API (not a tag push) because GitHub's recursion guard blocks
+# GITHUB_TOKEN from triggering workflows on `push: tags:` events.
+# workflow_dispatch is the one trigger the recursion guard explicitly
+# allows to fire from GITHUB_TOKEN.
 permissions:
   contents: write
 
@@ -50,43 +49,66 @@ jobs:
           ./ci/check-upstream.sh "${{ matrix.app }}"
           if git describe --tags --exact-match HEAD 2>/dev/null; then
             TAG=$(git describe --tags --exact-match HEAD)
-            echo "NEW_TAG=$TAG" >> "$GITHUB_OUTPUT"
-            echo "NEW_VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
-            echo "Created tag: $TAG"
+            # Drop the 'v' prefix — release.yml's workflow_dispatch input
+            # wants just the numeric version.
+            VERSION="${TAG#v}"
+            echo "NEW_VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "Created local tag ${TAG}; will dispatch release for v${VERSION}"
           else
             echo "No new tag created"
           fi
 
-      - name: Push version bump + tag
-        if: steps.check.outputs.NEW_TAG != ''
-        env:
-          NEW_TAG: ${{ steps.check.outputs.NEW_TAG }}
+      - name: Push version bump to main
+        # Always push the version-bump commit (if any) so the commit is
+        # visible on main regardless of whether the release gets dispatched.
+        if: steps.check.outputs.NEW_VERSION != ''
         run: |
-          # Sanity check: refuse to push if NEW_TAG is malformed.
-          if ! [[ "$NEW_TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-            echo "::error::Refusing to push malformed tag: '$NEW_TAG'"
+          # If there's nothing new to push (race with another runner),
+          # `git push` exits non-zero — treat that as a soft failure.
+          if ! git push origin HEAD:main; then
+            echo "::warning::git push origin HEAD:main failed (likely a race); continuing"
+          fi
+
+      - name: Dispatch release workflow
+        if: steps.check.outputs.NEW_VERSION != ''
+        env:
+          NEW_VERSION: ${{ steps.check.outputs.NEW_VERSION }}
+        run: |
+          # Sanity check: refuse to dispatch with a malformed version.
+          if ! [[ "$NEW_VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            echo "::error::Refusing to dispatch release for malformed version: '$NEW_VERSION'"
             exit 1
           fi
 
-          # Push the version-bump commit to main. If there's nothing new
-          # to push (race with another runner), `git push` exits non-zero —
-          # treat that as a soft failure so the workflow still reports the
-          # tag was created.
-          if ! git push origin HEAD:main; then
-            echo "::warning::git push origin HEAD:main failed (likely a race); continuing to push the tag"
+          # Refuse to dispatch if a release for this version already exists
+          # (avoids clobbering a previous run that may have succeeded).
+          if gh release view "v${NEW_VERSION}" >/dev/null 2>&1; then
+            echo "::warning::Release v${NEW_VERSION} already exists; skipping dispatch"
+            exit 0
           fi
 
-          # Push the new tag. This is what triggers release.yml via `push: tags: 'v*'`.
-          git push origin "$NEW_TAG"
+          echo "Dispatching release.yml for v${NEW_VERSION}…"
+          RESPONSE=$(gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/dispatches" \
+            -f ref=main \
+            -f "inputs[version]=${NEW_VERSION}" 2>&1)
+          if [ -z "$RESPONSE" ]; then
+            echo "✓ Dispatched release for v${NEW_VERSION}"
+          else
+            echo "::error::Dispatch failed: $RESPONSE"
+            exit 1
+          fi
 
       - name: Summarize
         if: always()
         env:
-          NEW_TAG: ${{ steps.check.outputs.NEW_TAG }}
+          NEW_VERSION: ${{ steps.check.outputs.NEW_VERSION }}
         run: |
-          if [ -n "$NEW_TAG" ]; then
-            echo "::notice::New upstream release triggered: $NEW_TAG"
-            echo "The release.yml workflow should now be building $NEW_TAG."
+          if [ -n "$NEW_VERSION" ]; then
+            echo "::notice::New upstream release dispatched: v${NEW_VERSION}"
+            echo "Watch it build at: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/release.yml"
           else
             echo "Upstream is up to date. No release needed."
           fi
