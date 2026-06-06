@@ -11,6 +11,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege default for this job. The build only needs to read the
+# repo, write test artifacts to its own workspace, and upload artifacts
+# (upload-artifact uses the job token, no extra scope needed).
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build ${{ matrix.app }}
@@ -61,16 +67,23 @@ jobs:
           NO_COLOR: 1
 
       - name: Cardinal Rule test
-        run: ./ci/cardinal-rule-test.sh "dist/$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-).app"
+        # Uppercase the first letter of the app name to match the .app bundle.
+        run: |
+          APP_NAME="$(echo '${{ matrix.app }}' | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+          ./ci/cardinal-rule-test.sh "dist/${APP_NAME}.app"
 
       - name: Lift-and-shift test
-        run: ./ci/lift-and-shift-test.sh "dist/$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-).app"
+        run: |
+          APP_NAME="$(echo '${{ matrix.app }}' | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+          ./ci/lift-and-shift-test.sh "dist/${APP_NAME}.app"
 
       - name: Package .dmg
         run: ./ci/package-dmg.sh ${{ matrix.app }}
 
       - name: Sign .app
-        run: ./ci/sign-app.sh "dist/$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-).app"
+        run: |
+          APP_NAME="$(echo '${{ matrix.app }}' | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+          ./ci/sign-app.sh "dist/${APP_NAME}.app"
 
       - name: Upload .dmg artifact
         uses: actions/upload-artifact@v4

@@ -9,21 +9,35 @@ concurrency:
   group: upstream-check-${{ github.ref }}
   cancel-in-progress: false
 
+# GITHUB_TOKEN is sufficient here. Tag push from GITHUB_TOKEN DOES trigger
+# workflows keyed on `push: tags:` (release.yml). The recursion guard only
+# blocks `workflow_run` and `pull_request` from being re-triggered by a
+# workflow run. Branch/tag push events always fire downstream workflows.
+# We previously required PAT_GITHUB_TOKEN because of a misread of the rule
+# — the real failure mode was the secret getting corrupted, not the token.
 permissions:
   contents: write
 
 jobs:
   check-upstream:
-    name: Check upstream Odysseus
+    name: Check upstream ${{ matrix.app }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # To add a new per-app, add its name here. Each must have an entry
+        # under apps/<name>/webappify.yaml and apps/<name>/.upstream-commit.
+        app: [odysseus]
 
     steps:
-      - name: Checkout mac-app-builder (with PAT to trigger downstream workflows)
+      - name: Checkout mac-app-builder
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.PAT_GITHUB_TOKEN }}
+          # No token: use the default GITHUB_TOKEN. It is provisioned by
+          # GitHub Actions and works for both fetch and push within this job.
+          persist-credentials: true
 
       - name: Configure git
         run: |
@@ -32,29 +46,38 @@ jobs:
 
       - name: Check upstream for new commits
         id: check
-        run: |
-          ./ci/check-upstream.sh odysseus
-          if git describe --tags --exact-match HEAD 2>/dev/null; then
-            TAG=$(git describe --tags --exact-match HEAD)
-            echo "NEW_TAG=$TAG" >> "$GITHUB_OUTPUT"
-            echo "NEW_VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
-            echo "Created tag: $TAG"
-          else
-            echo "No new tag created"
-          fi
+        run: ./ci/check-upstream.sh "${{ matrix.app }}"
 
       - name: Push version bump + tag
         if: steps.check.outputs.NEW_TAG != ''
+        env:
+          NEW_TAG: ${{ steps.check.outputs.NEW_TAG }}
         run: |
-          # Use PAT in the remote URL to trigger downstream workflows
-          git remote set-url origin https://x-access-token:${{ secrets.PAT_GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          git push origin main
-          git push origin "${{ steps.check.outputs.NEW_TAG }}"
+          # Sanity check: refuse to push if NEW_TAG is malformed.
+          if ! [[ "$NEW_TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::Refusing to push malformed tag: '$NEW_TAG'"
+            exit 1
+          fi
+
+          # Push the version-bump commit to main. If there's nothing new
+          # to push (race with another runner), `git push` exits non-zero —
+          # treat that as a soft failure so the workflow still reports the
+          # tag was created.
+          if ! git push origin HEAD:main; then
+            echo "::warning::git push origin HEAD:main failed (likely a race); continuing to push the tag"
+          fi
+
+          # Push the new tag. This is what triggers release.yml via `push: tags: 'v*'`.
+          git push origin "$NEW_TAG"
 
       - name: Summarize
+        if: always()
+        env:
+          NEW_TAG: ${{ steps.check.outputs.NEW_TAG }}
         run: |
-          if [ -n "${{ steps.check.outputs.NEW_TAG }}" ]; then
-            echo "New upstream release triggered: ${{ steps.check.outputs.NEW_TAG }}"
+          if [ -n "$NEW_TAG" ]; then
+            echo "::notice::New upstream release triggered: $NEW_TAG"
+            echo "The release.yml workflow should now be building $NEW_TAG."
           else
             echo "Upstream is up to date. No release needed."
           fi

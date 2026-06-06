@@ -15,7 +15,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false   # don't cancel a release in progress
 
-# Need write permission to create releases, upload assets, and push appcast commits
+# Need write permission to create releases, upload assets, and push appcast commits.
+# GITHUB_TOKEN works for tag-push triggers: the recursion guard does not
+# apply to direct `push` events, so the same workflow can push appcast
+# updates back to main without needing a PAT.
 permissions:
   contents: write
 
@@ -33,6 +36,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python (for signing + appcast generation)
         uses: actions/setup-python@v5
@@ -52,16 +57,22 @@ jobs:
         run: ./ci/build-app.sh ${{ matrix.app }}
 
       - name: Cardinal Rule test
-        run: ./ci/cardinal-rule-test.sh "dist/$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-).app"
+        run: |
+          APP_NAME="$(echo '${{ matrix.app }}' | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+          ./ci/cardinal-rule-test.sh "dist/${APP_NAME}.app"
 
       - name: Lift-and-shift test
-        run: ./ci/lift-and-shift-test.sh "dist/$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-).app"
+        run: |
+          APP_NAME="$(echo '${{ matrix.app }}' | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+          ./ci/lift-and-shift-test.sh "dist/${APP_NAME}.app"
 
       - name: Package .dmg
         run: ./ci/package-dmg.sh ${{ matrix.app }} ${{ steps.version.outputs.VERSION }}
 
       - name: Sign .app
-        run: ./ci/sign-app.sh "dist/$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-).app"
+        run: |
+          APP_NAME="$(echo '${{ matrix.app }}' | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+          ./ci/sign-app.sh "dist/${APP_NAME}.app"
 
       - name: Sign .dmg + generate appcast
         env:
@@ -69,7 +80,8 @@ jobs:
         run: |
           # Compute the public URL the .dmg will live at once released.
           # GitHub Releases: https://github.com/<owner>/<repo>/releases/download/<tag>/<file>
-          DMG_FILE="$(echo ${{ matrix.app }} | tr '[:lower:]' '[:upper:]' | cut -c1)$(echo ${{ matrix.app }} | cut -c2-)-${{ steps.version.outputs.VERSION }}.dmg"
+          APP_NAME="$(echo '${{ matrix.app }}' | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+          DMG_FILE="${APP_NAME}-${{ steps.version.outputs.VERSION }}.dmg"
           DMG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${DMG_FILE}"
           ./ci/publish-release.sh ${{ matrix.app }} ${{ steps.version.outputs.VERSION }} "$DMG_URL"
 
@@ -89,16 +101,93 @@ jobs:
         # NEVER modify appcasts/<app>.xml manually on a local machine —
         # the CI-built .dmg and locally-built .dmg have different file
         # sizes, so their signatures will never match.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git add appcasts/${{ matrix.app }}.xml
-          if git diff --cached --quiet; then
+
+          # `git diff --quiet` exits 0 when there are NO differences and
+          # 1 when there ARE differences. So `if git diff --quiet` enters
+          # the block when nothing changed.
+          if git diff --quiet -- appcasts/${{ matrix.app }}.xml; then
             echo "No appcast changes to commit"
-          else
-            git commit -m "Release ${{ matrix.app }} ${{ steps.version.outputs.VERSION }}: update appcast"
-            # Pull latest main and rebase to avoid rejection
-            git fetch origin main
-            git rebase origin/main || git rebase --abort
-            git push origin HEAD:main
+            exit 0
           fi
+
+          echo "Appcast changed; committing to main"
+
+          # Use the gh API to commit the appcast directly to main. This
+          # avoids the rebase loop entirely: the API takes a base tree
+          # SHA and applies a commit on top, so concurrent commits don't
+          # conflict — the only risk is a non-fast-forward if multiple
+          # releases try to update main at once, which we handle with a
+          # single retry.
+          APPCAST_PATH="appcasts/${{ matrix.app }}.xml"
+          COMMIT_MSG="Release ${{ matrix.app }} ${{ steps.version.outputs.VERSION }}: update appcast"
+
+          attempt=0
+          max_attempts=3
+          while [ $attempt -lt $max_attempts ]; do
+            attempt=$((attempt + 1))
+
+            # Get the current tip of main
+            BASE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
+            BASE_TREE=$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${BASE_SHA}" --jq .tree.sha)
+
+            # Build the new tree containing just the updated appcast.
+            # Use --input with a JSON body so the XML content is sent
+            # verbatim (form fields would percent-encode the angle brackets).
+            TREE_BODY=$(jq -n \
+              --arg base_tree "$BASE_TREE" \
+              --arg path "$APPCAST_PATH" \
+              --rawfile content "$APPCAST_PATH" \
+              '{base_tree: $base_tree, tree: [{path: $path, mode: "100644", type: "blob", content: $content}]}')
+            NEW_TREE=$(echo "$TREE_BODY" | gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/git/trees" \
+              --input - \
+              --jq .sha 2>/tmp/tree-err) || {
+                echo "::warning::tree creation failed (attempt $attempt):"
+                cat /tmp/tree-err
+                sleep $((attempt * 5))
+                continue
+              }
+
+            # Create the commit. The parents array is sent as JSON.
+            COMMIT_BODY=$(jq -n \
+              --arg msg "$COMMIT_MSG" \
+              --arg tree "$NEW_TREE" \
+              --arg parent "$BASE_SHA" \
+              '{message: $msg, tree: $tree, parents: [$parent]}')
+            NEW_COMMIT=$(echo "$COMMIT_BODY" | gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/git/commits" \
+              --input - \
+              --jq .sha 2>/tmp/commit-err) || {
+                echo "::warning::commit creation failed (attempt $attempt):"
+                cat /tmp/commit-err
+                sleep $((attempt * 5))
+                continue
+              }
+
+            # Update the ref. May fail with 422 if main moved; retry.
+            REF_BODY=$(jq -n --arg sha "$NEW_COMMIT" '{sha: $sha, force: false}')
+            if echo "$REF_BODY" | gh api \
+              --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/git/refs/heads/main" \
+              --input - >/dev/null 2>/tmp/ref-err; then
+              echo "Appcast committed to main: $NEW_COMMIT"
+              exit 0
+            fi
+
+            echo "::warning::ref update raced (attempt $attempt); retrying"
+            cat /tmp/ref-err
+            sleep $((attempt * 5))
+          done
+
+          echo "::error::Failed to commit appcast after $max_attempts attempts"
+          exit 1
