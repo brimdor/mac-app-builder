@@ -73,6 +73,13 @@ jobs:
         if: steps.check.outputs.NEW_VERSION != ''
         env:
           NEW_VERSION: ${{ steps.check.outputs.NEW_VERSION }}
+          # gh api requires GH_TOKEN in CI — without it, `gh` looks for a
+          # local `gh auth login` session (which doesn't exist on the
+          # runner) and exits with code 4 + a "set the GH_TOKEN
+          # environment variable" error. The default GITHUB_TOKEN is
+          # sufficient: the dispatch endpoint only needs repo access,
+          # not a PAT.
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Sanity check: refuse to dispatch with a malformed version.
           if ! [[ "$NEW_VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
