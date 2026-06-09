@@ -9,13 +9,16 @@ concurrency:
   group: upstream-check-${{ github.ref }}
   cancel-in-progress: false
 
-# GITHUB_TOKEN is sufficient. We dispatch release.yml via the workflow
-# dispatch API (not a tag push) because GitHub's recursion guard blocks
-# GITHUB_TOKEN from triggering workflows on `push: tags:` events.
-# workflow_dispatch is the one trigger the recursion guard explicitly
-# allows to fire from GITHUB_TOKEN.
+# GITHUB_TOKEN is sufficient for the upstream detection + version bump.
+# We dispatch release.yml via the workflow dispatch API (not a tag push)
+# because GitHub's recursion guard blocks GITHUB_TOKEN from triggering
+# workflows on `push: tags:` events. workflow_dispatch is the one
+# trigger the recursion guard explicitly allows to fire from
+# GITHUB_TOKEN, but it requires the `actions: write` permission
+# (in addition to `contents: write` for the version-bump push).
 permissions:
   contents: write
+  actions: write
 
 jobs:
   check-upstream:
@@ -73,6 +76,14 @@ jobs:
         if: steps.check.outputs.NEW_VERSION != ''
         env:
           NEW_VERSION: ${{ steps.check.outputs.NEW_VERSION }}
+          # gh api requires GH_TOKEN in CI — without it, `gh` looks for a
+          # local `gh auth login` session (which doesn't exist on the
+          # runner) and exits with code 4 + a "set the GH_TOKEN
+          # environment variable" error. The default GITHUB_TOKEN is
+          # sufficient (the dispatch endpoint only needs repo access,
+          # not a PAT) and works in tandem with the workflow-level
+          # `actions: write` permission.
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Sanity check: refuse to dispatch with a malformed version.
           if ! [[ "$NEW_VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
@@ -89,23 +100,12 @@ jobs:
 
           echo "Dispatching release.yml for v${NEW_VERSION}…"
           # IMPORTANT: this step runs with `set -e` (shell: bash -e {0}).
-          # Two failure modes to guard against:
-          #
-          # 1. `gh api --method POST -f key=value` builds a
-          #    application/x-www-form-urlencoded body. GitHub's workflow
-          #    dispatch endpoint expects application/json with a nested
-          #    `inputs` object. Form-encoding the bracketed key
-          #    `inputs[version]` produces a body the server rejects
-          #    with HTTP 422, which `gh api` surfaces as exit code 4
-          #    — killing the script under `set -e` with a cryptic
-          #    "Process completed with exit code 4." Use --input +
-          #    jq to build a real JSON body, the same pattern
-          #    release.yml uses for its appcast commit.
-          #
-          # 2. gh api returns exit 4 on any HTTP 4xx. Capture the
-          #    exit code explicitly so the failure surfaces as a
-          #    ::error:: with the API's response body, not as an
-          #    opaque script death.
+          # gh api returns non-zero on any HTTP 4xx (e.g., 403 if the
+          # token can't trigger the workflow, 422 on a malformed body).
+          # Under `set -e` the script would die before we could see the
+          # actual server response. Capture the exit code + response
+          # body so a future failure surfaces as a ::error:: with the
+          # real reason, not a bare "Process completed with exit code 4."
           DISPATCH_BODY=$(jq -n \
             --arg ref "main" \
             --arg ver "${NEW_VERSION}" \
