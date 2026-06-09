@@ -9,13 +9,16 @@ concurrency:
   group: upstream-check-${{ github.ref }}
   cancel-in-progress: false
 
-# GITHUB_TOKEN is sufficient. We dispatch release.yml via the workflow
-# dispatch API (not a tag push) because GitHub's recursion guard blocks
-# GITHUB_TOKEN from triggering workflows on `push: tags:` events.
-# workflow_dispatch is the one trigger the recursion guard explicitly
-# allows to fire from GITHUB_TOKEN.
+# GITHUB_TOKEN is sufficient for the upstream detection + version bump.
+# We dispatch release.yml via the workflow dispatch API (not a tag push)
+# because GitHub's recursion guard blocks GITHUB_TOKEN from triggering
+# workflows on `push: tags:` events. workflow_dispatch is the one
+# trigger the recursion guard explicitly allows to fire from
+# GITHUB_TOKEN, but it requires the `actions: write` permission
+# (in addition to `contents: write` for the version-bump push).
 permissions:
   contents: write
+  actions: write
 
 jobs:
   check-upstream:
