@@ -88,16 +88,41 @@ jobs:
           fi
 
           echo "Dispatching release.yml for v${NEW_VERSION}…"
-          RESPONSE=$(gh api \
+          # IMPORTANT: this step runs with `set -e` (shell: bash -e {0}).
+          # Two failure modes to guard against:
+          #
+          # 1. `gh api --method POST -f key=value` builds a
+          #    application/x-www-form-urlencoded body. GitHub's workflow
+          #    dispatch endpoint expects application/json with a nested
+          #    `inputs` object. Form-encoding the bracketed key
+          #    `inputs[version]` produces a body the server rejects
+          #    with HTTP 422, which `gh api` surfaces as exit code 4
+          #    — killing the script under `set -e` with a cryptic
+          #    "Process completed with exit code 4." Use --input +
+          #    jq to build a real JSON body, the same pattern
+          #    release.yml uses for its appcast commit.
+          #
+          # 2. gh api returns exit 4 on any HTTP 4xx. Capture the
+          #    exit code explicitly so the failure surfaces as a
+          #    ::error:: with the API's response body, not as an
+          #    opaque script death.
+          DISPATCH_BODY=$(jq -n \
+            --arg ref "main" \
+            --arg ver "${NEW_VERSION}" \
+            '{ref: $ref, inputs: {version: $ver}}')
+          set +e
+          RESPONSE=$(echo "$DISPATCH_BODY" | gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/dispatches" \
-            -f ref=main \
-            -f "inputs[version]=${NEW_VERSION}" 2>&1)
-          if [ -z "$RESPONSE" ]; then
+            --input - 2>&1)
+          GH_EXIT=$?
+          set -e
+          if [ $GH_EXIT -eq 0 ] && [ -z "$RESPONSE" ]; then
             echo "✓ Dispatched release for v${NEW_VERSION}"
           else
-            echo "::error::Dispatch failed: $RESPONSE"
+            echo "::error::Dispatch failed (gh api exit $GH_EXIT): $RESPONSE"
             exit 1
           fi
 
